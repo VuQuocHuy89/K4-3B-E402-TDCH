@@ -2,7 +2,6 @@
 
 > Cấu trúc phủ đúng "SPEC 8 phần" của chương trình: Bằng chứng (§1-§2) · Lát cắt (§4) · Canvas (đính kèm CP1) · Augment/Automate (§4) · 4 đường đi của trải nghiệm (§6) · Kiểu lỗi (§5) · Kiểm thử (§7) · Phân công (§8). Hướng dẫn viết từng mục: `02-guide.md`.
 
-```markdown
 Hướng: [ ] A — VLearn Tutor  [ ] B — Trợ lý Discord  [ ] C — Lesson Studio  [x] D — Học tập thích ứng & tương tác  [ ] E — Làn mở
 Loại: [ ] Tối ưu tính năng có sẵn  [x] Tính năng mới
 
@@ -29,19 +28,30 @@ Loại: [ ] Tối ưu tính năng có sẵn  [x] Tính năng mới
 - [Sản phẩm 2]: ...
 
 ## §4. Thiết kế
-- Lát cắt MỘT CÂU (1 user · 1 việc · 1 quyết định AI · 1 kết quả):
+- Lát cắt MỘT CÂU (1 user · 1 việc · 1 quyết định AI · 1 kết quả): Một học viên nhập mục tiêu, nền tảng và thời gian học rồi hoàn thành diagnostic; AI phân tích knowledge gap và chọn thứ tự topic/section; kết quả là learning path cá nhân có lý do và điều kiện chuyển bước.
 - Non-goals (≥3 thứ KHÔNG build):
-- Mức prototype nhắm tới: [ ] Sketch [ ] Mock [ ] Working — phần nào mock, phần nào thật:
-- Automation: [ ] augment [ ] conditional [ ] automate — lý do theo cost-of-error:
+  1. Không xây lại toàn bộ giao diện VLearn.
+  2. Không triển khai toàn bộ curriculum AI Engineer.
+  3. Không xây hệ thống chứng chỉ hoặc thay thế giảng viên/TA.
+- Mức prototype nhắm tới: [ ] Sketch [x] Mock [ ] Working — CP2 sử dụng sơ đồ flow trong `codebase/`; AI/API, scoring và dữ liệu chạy thật chưa triển khai.
+- Automation: [ ] augment [x] conditional [ ] automate — AI đề xuất competency profile, knowledge gap và learning path; rule kiểm tra dữ liệu đầu vào, ngưỡng đánh giá và các luồng fallback.
 - §4b. Nguyên tắc đã áp dụng (≥4 — HAX/PAIR, xem guide):
   | Nguyên tắc | Áp cụ thể vào đâu trong prototype |
   |---|---|
+  | G10 — Thu hẹp phạm vi khi nghi ngờ | Khi dữ liệu thiếu hoặc confidence thấp, yêu cầu bổ sung hoặc làm lại diagnostic; không tự chốt roadmap. |
+  | G8 — Gạt bỏ dễ dàng | Cho phép người học bỏ qua hoặc không chấp nhận learning path được đề xuất. |
+  | G9 — Sửa dễ dàng | Cho phép sửa mục tiêu, thời gian, deadline hoặc câu trả lời để tạo lại learning path. |
+  | G11 — Giải thích vì sao | Mỗi topic/section được đề xuất kèm knowledge gap, prerequisite hoặc kết quả diagnostic làm căn cứ. |
 
 ## §5. Kiểu lỗi — 4 lớp chỗ khó + kịch bản (≥8) [bảng theo guide §2.5]
 
 ## §6. Bốn đường đi của trải nghiệm
-- Happy path: · Low-confidence (②): · Failure/không căn cứ (①): · Correction (user sửa):
-- Khi bị đòi ngoài phạm vi (③): · Case đặc thù domain (④):
+- Happy path: Nhập đủ thông tin → hoàn thành diagnostic → tạo competency profile → tạo learning path → học section → mastery test đạt từ 80% → chuyển section/topic tiếp theo.
+- Low-confidence (②): Dữ liệu chưa đủ hoặc AI confidence thấp → yêu cầu thêm câu trả lời/thông tin → chạy lại diagnostic → chưa đưa ra kết luận chắc chắn.
+- Failure/không căn cứ (①): AI API lỗi/timeout → retry hoặc fallback; không tìm thấy tài liệu → thông báo chưa đủ căn cứ, không tự tạo nội dung.
+- Correction (user sửa): Người học sửa mục tiêu, thời gian, deadline hoặc câu trả lời → tạo lại competency profile và learning path.
+- Khi bị đòi ngoài phạm vi (③): Câu hỏi không thuộc topic/content pack → thông báo phạm vi hỗ trợ và đưa người học về nội dung đang học.
+- Case đặc thù domain (④): Nếu còn thiếu prerequisite Python/SQL/ML/LLM → ưu tiên kiến thức nền trước topic mới; nếu deadline không khả thi → đề xuất điều chỉnh thời gian hoặc phạm vi.
 
 ## §7. Kiểm thử
 - Chiều chất lượng + định nghĩa kiểm chứng được:
@@ -56,4 +66,3 @@ Loại: [ ] Tối ưu tính năng có sẵn  [x] Tính năng mới
 
 ## §9. Changelog
 | Thời điểm | Đổi gì | Vì sao (trỏ về feedback/case nào) |
-```
