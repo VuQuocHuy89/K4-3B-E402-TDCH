@@ -1,7 +1,8 @@
 (() => {
   "use strict";
 
-  let pack = window.CONTENT_PACK;
+  const staticPack = window.CONTENT_PACK;
+  let pack = staticPack;
   const viewContainer = document.querySelector("#view-container");
   const appShell = document.querySelector("#app-shell");
   const authGate = document.querySelector("#auth-gate");
@@ -12,7 +13,7 @@
   const isValidMinutes = (value) => Number.isInteger(Number(value)) && Number(value) >= 10 && Number(value) <= 240;
   const isValidTopic = (value) => String(value || "").trim().length >= 3 && String(value || "").trim().length <= 120;
   const API_BASE = String(window.PATHWISE_API_BASE || "").trim().replace(/\/+$/, "");
-  const ASSESSMENT_VERSION = 2;
+  const ASSESSMENT_VERSION = 3;
   const AUTH_USERS_KEY = "pathwise-auth-users-v1";
   const AUTH_SESSION_KEY = "pathwise-auth-session-v1";
   const AUTH_TOKEN_KEY = "pathwise-auth-token-v1";
@@ -36,6 +37,7 @@
     pathTopic: "",
     pathLevel: "new",
     pathMinutes: "",
+    topicBlueprint: null,
     diagnosticIndex: 0,
     diagnosticAnswers: {},
     diagnosticConfidence: {},
@@ -92,7 +94,7 @@
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
   defaultState.view = "setup";
-  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "topicBlueprint", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
   const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
   const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
   const learnerName = () => currentUser?.name || pack.learner.name;
@@ -152,7 +154,7 @@
       }
     } catch {}
   };
-  const resetInMemoryState = () => Object.assign(state, cloneData(defaultState));
+  const resetInMemoryState = () => { pack = staticPack; Object.assign(state, cloneData(defaultState)); };
   const resetAssessmentState = () => {
     state.assessmentVersion = ASSESSMENT_VERSION;
     state.assessmentQuestions = { diagnostic: [], mastery: {}, final: [] };
@@ -191,6 +193,8 @@
       const saved = JSON.parse(localStorage.getItem(stateStorageKey()) || "null");
       if (!saved || typeof saved !== "object") return;
       persistableState.forEach((key) => { if (saved[key] !== undefined) state[key] = saved[key]; });
+      const hydratedBlueprint = normalizeTopicBlueprint(state.topicBlueprint);
+      pack = hydratedBlueprint || staticPack;
       if (saved.assessmentVersion !== ASSESSMENT_VERSION) resetAssessmentState();
       if (!state.assessmentQuestions || typeof state.assessmentQuestions !== "object") state.assessmentQuestions = { diagnostic: [], mastery: {}, final: [] };
       if (!Array.isArray(state.assessmentQuestions.diagnostic)) state.assessmentQuestions.diagnostic = [];
@@ -265,6 +269,7 @@
   ];
 
   const rewardArtwork = (index, unlocked = false) => {
+    const rewardIndex = index % journeyRewards.length;
     const tone = unlocked ? "#4F46E5" : "#94A3B8";
     const accent = unlocked ? "#F59E0B" : "#CBD5E1";
     const mint = unlocked ? "#16A34A" : "#CBD5E1";
@@ -276,7 +281,7 @@
       `<circle cx="40" cy="40" r="27" fill="#fff" stroke="${tone}" stroke-width="4"/><circle cx="40" cy="40" r="17" fill="none" stroke="${tone}" stroke-width="3" stroke-dasharray="5 5"/><path d="M40 40 58 26" stroke="${mint}" stroke-width="4" stroke-linecap="round"/><circle cx="40" cy="40" r="5" fill="${accent}"/>`,
       `<path d="M44 13c13 5 20 17 20 31L48 60 30 42c1-14 6-24 14-29Z" fill="#fff" stroke="${tone}" stroke-width="4" stroke-linejoin="round"/><circle cx="47" cy="32" r="6" fill="${accent}" stroke="${tone}" stroke-width="3"/><path d="m31 43-11 4 9 9 2-13Zm16 17-4 11-9-9 13-2Z" fill="${mint}" stroke="${tone}" stroke-width="3" stroke-linejoin="round"/>`,
     ];
-    return `<svg class="reward-art" width="80" height="80" viewBox="0 0 80 80" role="img" aria-label="${escapeHtml(journeyRewards[index].name)}"><circle cx="40" cy="40" r="38" fill="${unlocked ? "#EEF2FF" : "#F1F5F9"}"/>${drawings[index]}</svg>`;
+    return `<svg class="reward-art" width="80" height="80" viewBox="0 0 80 80" role="img" aria-label="${escapeHtml(journeyRewards[rewardIndex].name)}"><circle cx="40" cy="40" r="38" fill="${unlocked ? "#EEF2FF" : "#F1F5F9"}"/>${drawings[rewardIndex]}</svg>`;
   };
 
   const animeAvatar = () => `<svg width="74" height="106" viewBox="0 0 74 106" role="img" aria-label="Nhân vật đại diện của bạn">
@@ -307,9 +312,35 @@
   const activeMasteryQuestions = () => state.assessmentQuestions?.mastery?.[state.selectedSectionId]?.length ? state.assessmentQuestions.mastery[state.selectedSectionId] : getSection().masteryQuestions || pack.masteryQuestions || [];
   const activeFinalQuestions = () => state.assessmentQuestions?.final?.length ? state.assessmentQuestions.final : pack.finalQuestions;
   const plannedAssessmentCount = (mode, sectionId = state.selectedSectionId) => {
+    if (Number(pack.assessmentCounts?.[mode]) > 0 && mode !== "mastery") return Number(pack.assessmentCounts[mode]);
     if (mode === "mastery") return Math.max(3, Math.min(8, ((getSection(sectionId).concepts || []).length || (getSection(sectionId).checklist || []).length || 2) * 2));
-    const perSection = 2;
-    return Math.max(mode === "final" ? 6 : 4, Math.min(mode === "final" ? 24 : 20, pack.sections.length * perSection));
+    const total = pack.sections.reduce((count, section) => count + Math.max(1, Math.min(3, Math.ceil((((section.concepts || []).length + (section.checklist || []).length) || 3) / 3))), 0);
+    return Math.max(mode === "final" ? 6 : 4, Math.min(mode === "final" ? 24 : 20, total));
+  };
+  const normalizeTopicBlueprint = (blueprint) => {
+    if (!blueprint?.topic || !Array.isArray(blueprint.sections) || !blueprint.sections.length) return null;
+    const sourceIds = new Set((blueprint.sources || []).map((source) => source.id));
+    const sections = blueprint.sections.map((section, index) => ({
+      ...section,
+      id: section.id || `topic-section-${index + 1}`,
+      number: section.number || String(index + 1).padStart(2, "0"),
+      duration: Number(section.duration) || 20,
+      sourceIds: (section.sourceIds || section.source_ids || []).filter((id) => sourceIds.has(id)),
+      concepts: Array.isArray(section.concepts) ? section.concepts : [],
+      checklist: Array.isArray(section.checklist) ? section.checklist : [],
+      masteryQuestions: Array.isArray(section.masteryQuestions) ? section.masteryQuestions : [],
+    }));
+    return {
+      ...staticPack,
+      ...blueprint,
+      topic: { ...staticPack.topic, ...blueprint.topic, roadmapRef: blueprint.roadmapRef || staticPack.topic.roadmapRef },
+      sources: Array.isArray(blueprint.sources) ? blueprint.sources : [],
+      competencies: Array.isArray(blueprint.competencies) ? blueprint.competencies : [],
+      sections,
+      diagnosticQuestions: Array.isArray(blueprint.diagnosticQuestions) ? blueprint.diagnosticQuestions : [],
+      finalQuestions: Array.isArray(blueprint.finalQuestions) ? blueprint.finalQuestions : [],
+      assessmentCounts: blueprint.assessmentCounts || {},
+    };
   };
   const assessmentStatus = (mode) => {
     const meta = mode === "mastery" ? state.assessmentMeta?.mastery?.[state.selectedSectionId] : state.assessmentMeta?.[mode];
@@ -473,9 +504,25 @@
   }));
 
   const fallbackQuestionsFor = (mode, sectionId = state.selectedSectionId) => {
-    if (mode === "diagnostic") return pack.diagnosticQuestions;
-    if (mode === "mastery") return getSection(sectionId).masteryQuestions || [];
-    return pack.finalQuestions;
+    if (mode === "diagnostic" && pack.diagnosticQuestions?.length) return pack.diagnosticQuestions;
+    if (mode === "final" && pack.finalQuestions?.length) return pack.finalQuestions;
+    const sectionsForQuestions = mode === "mastery" ? [getSection(sectionId)] : pack.sections;
+    return sectionsForQuestions.flatMap((section, sectionIndex) => {
+      const concepts = section.concepts || [];
+      const count = mode === "mastery" ? Math.max(3, Math.min(8, (concepts.length || section.checklist?.length || 2) * 2)) : Math.max(1, Math.min(3, Math.ceil(((concepts.length + (section.checklist || []).length) || 3) / 3)));
+      return Array.from({ length: count }, (_, index) => ({
+        id: mode + "-" + section.id + "-" + (index + 1),
+        sectionId: section.id,
+        competencyId: section.competencyId,
+        label: mode === "mastery" ? "Section check" : "Topic coverage",
+        prompt: "Trong " + section.title + ", mục tiêu nào cần được nắm để áp dụng vào thực tế?",
+        options: [section.objective || "Giải thích được mục tiêu và cách áp dụng của section.", "Chỉ cần nhớ tên công cụ mà không cần hiểu mục tiêu.", "Có thể bỏ qua dữ liệu và cách đánh giá.", "Chọn đáp án dựa trên tên model phổ biến nhất."],
+        correctIndex: 0,
+        explanation: "Câu hỏi fallback được dựng từ objective của section " + section.title + ".",
+        sourceIds: section.sourceIds || [],
+        _sectionIndex: sectionIndex,
+      }));
+    });
   };
 
   const assessmentSeed = (value) => [...String(value || "")].reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0, 2166136261);
@@ -505,12 +552,75 @@
     sourceIds: question.sourceIds || question.source_ids || [],
   }));
 
+  const ensureAssessmentQuestionCount = (mode, questions, fallbackQuestions, sectionId = state.selectedSectionId) => {
+    const desiredCount = plannedAssessmentCount(mode, sectionId);
+    const sourceQuestions = questions.length ? questions : fallbackQuestions;
+    if (!sourceQuestions.length) return [];
+    if (sourceQuestions.length >= desiredCount) return sourceQuestions.slice(0, desiredCount);
+
+    const expandedQuestions = [];
+    for (let index = 0; index < desiredCount; index += 1) {
+      const source = sourceQuestions[index % sourceQuestions.length];
+      const needsSupplement = index >= sourceQuestions.length;
+      expandedQuestions.push(needsSupplement ? {
+        ...source,
+        id: `${source.id || `${mode}-question`}-supplement-${index + 1}`,
+        label: `${source.label || "Knowledge check"} · bổ sung`,
+      } : source);
+    }
+    return expandedQuestions;
+  };
+
+  const prepareTopicBlueprint = async () => {
+    let blueprint = normalizeTopicBlueprint(state.topicBlueprint);
+    if (!blueprint && API_BASE && authToken) {
+      try {
+        const response = await apiRequest("/api/learning/blueprint", {
+          topic: state.pathTopic,
+          topic_label: state.pathTopic,
+          level: state.pathLevel,
+          minutes: state.timePlan,
+          objective: "Xây lộ trình học có thể áp dụng vào mục tiêu nghề nghiệp của người học.",
+        });
+        blueprint = normalizeTopicBlueprint(response.data);
+        if (!blueprint) throw new Error("blueprint_empty");
+        state.agentMeta = response.meta;
+      } catch {
+        blueprint = null;
+        state.agentMeta = { live: false, provider: "static-catalog", fallback_reason: "blueprint_unavailable" };
+      }
+    }
+    if (blueprint) {
+      pack = blueprint;
+      state.topicBlueprint = blueprint;
+      state.selectedSectionId = blueprint.sections[0].id;
+      const sourceMap = new Map(blueprint.sources.map((source) => [source.id, source]));
+      state.discoveredSources = Object.fromEntries(blueprint.sections.map((section) => [section.id, {
+        status: "ok",
+        note: "Nguồn được tìm và lọc trong bước tạo learning blueprint.",
+        sources: (section.sourceIds || []).map((id) => sourceMap.get(id)).filter(Boolean),
+      }]));
+      state.generatedPackages = {};
+      showToast(state.agentMeta?.live ? "Đã tìm nguồn và dựng lộ trình theo topic của bạn." : "Không gọi được AI; đang dùng nội dung dự phòng an toàn.");
+    } else {
+      pack = staticPack;
+      state.topicBlueprint = null;
+      showToast("Đang dùng learning path dự phòng của Machine Learning.");
+    }
+    if (state.diagnosticSkipped) {
+      window.setTimeout(() => submitDiagnostic(true), 360);
+    } else {
+      loadAssessment("diagnostic");
+    }
+  };
+
   const loadAssessment = async (mode, sectionId = state.selectedSectionId) => {
     const loadingView = mode === "diagnostic" ? "diagnostic-loading" : mode === "mastery" ? "mastery-loading" : "assessment-loading";
     const targetView = mode === "diagnostic" ? "diagnostic" : mode === "mastery" ? "mastery" : "assessment";
     state.view = loadingView;
     render();
     const fallbackQuestions = normalizeAssessmentQuestions(fallbackQuestionsFor(mode, sectionId));
+    const completeFallbackQuestions = ensureAssessmentQuestionCount(mode, fallbackQuestions, fallbackQuestions, sectionId);
     try {
       const response = await apiRequest("/api/learning/assessment", {
         mode,
@@ -521,9 +631,11 @@
         learner_level: state.pathLevel,
         available_time_minutes: state.timePlan,
         sections: assessmentSections(),
-        fallback_questions: fallbackQuestions,
+        competencies: pack.competencies,
+        sources: pack.sources,
+        fallback_questions: completeFallbackQuestions,
       });
-      const questions = normalizeAssessmentQuestions(response.data?.questions || []);
+      const questions = ensureAssessmentQuestionCount(mode, normalizeAssessmentQuestions(response.data?.questions || []), completeFallbackQuestions, sectionId);
       if (!questions.length) throw new Error("assessment_empty");
       if (mode === "diagnostic") state.assessmentQuestions.diagnostic = questions;
       if (mode === "mastery") state.assessmentQuestions.mastery[sectionId] = questions;
@@ -531,9 +643,9 @@
       if (mode === "mastery") state.assessmentMeta.mastery[sectionId] = response.meta;
       else state.assessmentMeta[mode] = response.meta;
     } catch {
-      if (mode === "diagnostic") state.assessmentQuestions.diagnostic = fallbackQuestions;
-      if (mode === "mastery") state.assessmentQuestions.mastery[sectionId] = fallbackQuestions;
-      if (mode === "final") state.assessmentQuestions.final = fallbackQuestions;
+      if (mode === "diagnostic") state.assessmentQuestions.diagnostic = completeFallbackQuestions;
+      if (mode === "mastery") state.assessmentQuestions.mastery[sectionId] = completeFallbackQuestions;
+      if (mode === "final") state.assessmentQuestions.final = completeFallbackQuestions;
       const fallbackMeta = { live: false, provider: "content-fallback", fallback_reason: "assessment_backend_unavailable" };
       if (mode === "mastery") state.assessmentMeta.mastery[sectionId] = fallbackMeta;
       else state.assessmentMeta[mode] = fallbackMeta;
@@ -575,6 +687,7 @@
       const payload = await response.json();
       if (currentUser?.id === userId && payload.state && typeof payload.state === "object") {
         Object.assign(state, payload.state);
+        pack = normalizeTopicBlueprint(state.topicBlueprint) || pack;
         if (payload.state.assessmentVersion !== ASSESSMENT_VERSION) resetAssessmentState();
       }
     } catch {}
@@ -587,7 +700,7 @@
   const localAnalysis = () => {
     const gaps = activeDiagnosticQuestions().filter((question) => state.diagnosticAnswers[question.id] !== question.correctIndex);
     const gapCompetencies = [...new Set(gaps.map((question) => question.competencyId))];
-    const selected = gapCompetencies.length ? gapCompetencies : ["ml-foundations"];
+    const selected = gapCompetencies.length ? gapCompetencies : [pack.competencies[0]?.id].filter(Boolean);
     const competencyGaps = selected.map((id) => {
       const competency = getCompetency(id);
       return { competency_id: id, severity: gapCompetencies.includes(id) ? "high" : "medium", reason: `Ưu tiên ${competency.title} dựa trên tín hiệu diagnostic và prerequisite.`, source_ids: competency.sourceIds };
@@ -598,7 +711,7 @@
   const baselineAnalysis = () => ({
     status: "baseline",
     confidence: 0.55,
-    competency_gaps: [{ competency_id: "ml-foundations", severity: "unknown", reason: "Bạn chọn bắt đầu từ số 0 nên hệ thống ưu tiên nền tảng trước khi đánh giá chi tiết.", source_ids: ["GML-CH01"] }],
+    competency_gaps: [{ competency_id: pack.competencies[0]?.id, severity: "unknown", reason: "Bạn chọn bắt đầu từ số 0 nên hệ thống ưu tiên nền tảng trước khi đánh giá chi tiết.", source_ids: pack.competencies[0]?.sourceIds || [] }],
     recommended_path: pack.sections.map((section, index) => ({ section_id: section.id, reason: index === 0 ? "Bắt đầu từ nền tảng để tạo ngữ cảnh chung." : `Học sau khi hoàn thành prerequisite của ${pack.sections[index - 1].title}.`, estimated_minutes: Number.parseInt(section.duration, 10) || 10 })),
     next_action: "study",
     reason: "Bạn đã chọn bắt đầu từ số 0. Hệ thống bỏ qua bài test đầu vào và dựng roadmap nền tảng theo mục tiêu cùng thời lượng của bạn.",
@@ -710,7 +823,7 @@
         <div class="minutes-field"><label class="field-label" for="path-minutes">Thời gian học mỗi ngày</label><div class="minutes-input-wrap"><input id="path-minutes" name="path_minutes" type="number" min="10" max="240" step="1" inputmode="numeric" value="${state.pathMinutes === "" ? "" : escapeHtml(state.pathMinutes)}" placeholder="Ví dụ: 35" aria-describedby="path-minutes-help path-minutes-error" /><span>phút / ngày</span></div><small id="path-minutes-help">Nhập từ 10 đến 240 phút. Bạn có thể điều chỉnh lại sau.</small><small id="path-minutes-error" class="field-error" ${state.pathMinutes === "" || isValidMinutes(state.pathMinutes) ? "hidden" : ""}>Thời gian phải nằm trong khoảng 10–240 phút.</small></div>
         <div class="setup-footer"><span>${!isValidTopic(state.pathTopic) ? "Nhập một chủ đề để tiếp tục." : !isValidMinutes(state.pathMinutes) ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để vào diagnostic."}</span><button class="primary-button" type="button" data-action="create-path" ${isValidTopic(state.pathTopic) && isValidMinutes(state.pathMinutes) ? "" : "disabled"}>${state.pathLevel === "new" ? "Tạo roadmap nền tảng" : "Bắt đầu diagnostic"} ${icon("arrow")}</button></div>
       </section>
-      <aside class="setup-aside"><div class="setup-preview panel-card"><span class="panel-kicker">SAU KHI THIẾT LẬP</span><h3>Pathwise sẽ làm gì?</h3><div class="setup-preview-row"><span>01</span><p>${state.pathLevel === "new" ? "Dựng roadmap nền tảng từ mục tiêu của bạn" : "Mở diagnostic ngay để đánh giá mức độ bao phủ"}</p></div><div class="setup-preview-row"><span>02</span><p>Ưu tiên competency và section cần học</p></div><div class="setup-preview-row"><span>03</span><p>Đưa nội dung, ví dụ và bài thực hành theo section</p></div><div class="setup-preview-row"><span>04</span><p>Kiểm tra mastery bao quát trước khi mở bước tiếp</p></div></div><div class="setup-note panel-card"><span class="application-icon">${icon("shield")}</span><div><strong>Bạn luôn kiểm soát lộ trình</strong><p>Chủ đề do bạn nhập. Nội dung demo hiện có được map đầy đủ cho Machine Learning; chủ đề khác được giữ làm mục tiêu để mở rộng nội dung.</p></div></div></aside>
+        <aside class="setup-aside"><div class="setup-preview panel-card"><span class="panel-kicker">SAU KHI THIẾT LẬP</span><h3>Pathwise sẽ làm gì?</h3><div class="setup-preview-row"><span>01</span><p>${state.pathLevel === "new" ? "Dựng roadmap nền tảng từ mục tiêu của bạn" : "Mở diagnostic ngay để đánh giá mức độ bao phủ"}</p></div><div class="setup-preview-row"><span>02</span><p>Tìm nguồn và dựng competency theo topic</p></div><div class="setup-preview-row"><span>03</span><p>Tạo slide, ví dụ và bài thực hành theo section</p></div><div class="setup-preview-row"><span>04</span><p>Kiểm tra mastery bao quát trước khi mở bước tiếp</p></div></div><div class="setup-note panel-card"><span class="application-icon">${icon("shield")}</span><div><strong>Bạn luôn kiểm soát lộ trình</strong><p>Chủ đề do bạn nhập sẽ được web-grounded LLM phân tích, tìm nguồn và chia thành các section phù hợp. Mock content chỉ được dùng khi dịch vụ AI tạm thời không khả dụng.</p></div></div></aside>
     </div>`;
 
   const renderOverview = () => {
@@ -764,8 +877,8 @@
     const isLast = state.diagnosticIndex === questions.length - 1;
     return `
       ${pageHeader("DIAGNOSTIC · ĐÁNH GIÁ ĐẦU VÀO", "Đọc tín hiệu trước khi xếp lộ trình", `${questions.length} câu hỏi được sinh theo các competency và nội dung của topic. Kết quả dùng để chọn section ưu tiên, không thay thế mastery test.`, `<span class="assessment-rule"><span class="rule-icon">${icon("shield")}</span><span><strong>${escapeHtml(assessmentStatus("diagnostic"))}</strong><small>Pass mark chỉ áp dụng ở mastery test</small></span></span>`)}
-      <div class="assessment-progress"><div><span>DIAGNOSTIC PROGRESS</span><strong>${state.diagnosticIndex + 1} <em>/ ${questions.length}</em></strong></div><div class="segmented-progress">${questions.map((item, index) => `<i class="${index < state.diagnosticIndex ? "is-done" : index === state.diagnosticIndex ? "is-current" : ""}"></i>`).join("")}</div></div>
-      <div class="assessment-layout"><section class="assessment-card panel-card"><div class="question-meta"><span class="question-label">CÂU ${String(state.diagnosticIndex + 1).padStart(2, "0")}</span>${statusBadge(question.label, "info")}</div><h2 class="assessment-question">${escapeHtml(question.prompt)}</h2><div class="option-list" role="radiogroup" aria-label="Các lựa chọn trả lời">${question.options.map((option, index) => `<button class="option-button ${selected === index ? "is-selected" : ""}" type="button" role="radio" aria-checked="${selected === index}" data-action="answer-diagnostic" data-index="${index}"><span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${escapeHtml(option)}</span>${selected === index ? `<span class="selected-check">${icon("check")}</span>` : ""}</button>`).join("")}</div><div class="confidence-block"><div><span class="field-label">Bạn chắc đến đâu?</span><small>Đây là tín hiệu cho lộ trình, không phải điểm số.</small></div><div class="confidence-options" role="group" aria-label="Mức độ tự tin">${[["high", "Chắc chắn", "Hiểu và giải thích được"], ["medium", "Phân vân", "Nhớ một phần"], ["low", "Đang đoán", "Chưa có cơ sở rõ"]].map(([value, label, help]) => `<button class="confidence-option ${confidence === value ? "is-selected" : ""}" type="button" data-action="diagnostic-confidence" data-value="${value}" aria-pressed="${confidence === value}"><strong>${label}</strong><small>${help}</small></button>`).join("")}</div></div><div class="assessment-footer"><button class="quiet-button" type="button" data-action="diagnostic-prev" ${state.diagnosticIndex === 0 ? "disabled" : ""}>${icon("back")} Câu trước</button><button class="primary-button" type="button" data-action="diagnostic-next" ${selected === undefined ? "disabled" : ""}>${isLast ? "Xem kết quả" : "Câu tiếp theo"} ${icon("arrow")}</button></div></section><aside class="assessment-aside"><div class="aside-card aside-note"><span class="aside-icon">${icon("spark")}</span><h3>Đo lỗ hổng, không đo trí nhớ</h3><p>Các câu hỏi đi qua nhiều competency để tạo tín hiệu ban đầu. Sai một câu không làm bạn quay về vạch xuất phát.</p></div><div class="aside-card"><span class="aside-label">COVERAGE MAP</span><div class="diagnostic-coverage"><strong>${diagnosticCoverage().covered}/${diagnosticCoverage().total}</strong><span>competency đã chạm tới</span></div><div class="plan-line"><span class="plan-dot is-active"></span><span><strong>Diagnostic</strong><small>${questions.length} câu · theo phạm vi nội dung</small></span></div><div class="plan-line"><span class="plan-dot"></span><span><strong>Personal roadmap</strong><small>Được tạo sau kết quả</small></span></div><div class="plan-line"><span class="plan-dot"></span><span><strong>Mastery test</strong><small>Pass từ 80% ở từng section</small></span></div></div></aside></div>`;
+      <div class="assessment-progress" aria-label="Tiến độ diagnostic: câu ${state.diagnosticIndex + 1} trên ${questions.length}"><div><span>DIAGNOSTIC PROGRESS · ${questions.length} CÂU</span><strong>${state.diagnosticIndex + 1} <em>/ ${questions.length}</em></strong></div><div class="segmented-progress">${questions.map((item, index) => `<i class="${index < state.diagnosticIndex ? "is-done" : index === state.diagnosticIndex ? "is-current" : ""}"></i>`).join("")}</div></div>
+      <div class="assessment-layout"><section class="assessment-card panel-card"><div class="question-meta"><span class="question-label">CÂU ${String(state.diagnosticIndex + 1).padStart(2, "0")}</span>${statusBadge(question.label, "info")}</div><h2 class="assessment-question">${escapeHtml(question.prompt)}</h2><div class="option-list" role="radiogroup" aria-label="Các lựa chọn trả lời">${question.options.map((option, index) => `<button class="option-button ${selected === index ? "is-selected" : ""}" type="button" role="radio" aria-checked="${selected === index}" data-action="answer-diagnostic" data-index="${index}"><span class="option-letter">${String.fromCharCode(65 + index)}</span><span>${escapeHtml(option)}</span>${selected === index ? `<span class="selected-check">${icon("check")}</span>` : ""}</button>`).join("")}</div><div class="confidence-block"><div><span class="field-label">Bạn chắc đến đâu?</span><small>Đây là tín hiệu cho lộ trình, không phải điểm số.</small></div><div class="confidence-options" role="group" aria-label="Mức độ tự tin">${[["high", "Chắc chắn", "Hiểu và giải thích được"], ["medium", "Phân vân", "Nhớ một phần"], ["low", "Đang đoán", "Chưa có cơ sở rõ"]].map(([value, label, help]) => `<button class="confidence-option ${confidence === value ? "is-selected" : ""}" type="button" data-action="diagnostic-confidence" data-value="${value}" aria-pressed="${confidence === value}"><strong>${label}</strong><small>${help}</small></button>`).join("")}</div></div><div class="assessment-footer"><button class="quiet-button" type="button" data-action="diagnostic-prev" ${state.diagnosticIndex === 0 ? "disabled" : ""}>${icon("back")} Câu trước</button><button class="primary-button" type="button" data-action="diagnostic-next" ${selected === undefined ? "disabled" : ""}>${isLast ? "Xem kết quả" : "Câu tiếp theo"} ${icon("arrow")}</button></div></section><aside class="assessment-aside"><div class="aside-card aside-note"><span class="aside-icon">${icon("spark")}</span><h3>Đo lỗ hổng, không đo trí nhớ</h3><p>Các câu hỏi đi qua nhiều competency để tạo tín hiệu ban đầu. Sai một câu không làm bạn quay về vạch xuất phát.</p></div><div class="aside-card"><span class="aside-label">COMPETENCY COVERAGE</span><div class="diagnostic-coverage"><strong>${diagnosticCoverage().covered}/${diagnosticCoverage().total}</strong><span>competency đã chạm tới</span></div><div class="plan-line"><span class="plan-dot is-active"></span><span><strong>Diagnostic</strong><small>${questions.length} câu · theo phạm vi nội dung</small></span></div><div class="plan-line"><span class="plan-dot"></span><span><strong>Personal roadmap</strong><small>Được tạo sau kết quả</small></span></div><div class="plan-line"><span class="plan-dot"></span><span><strong>Mastery test</strong><small>Pass từ 80% ở từng section</small></span></div></div></aside></div>`;
   };
 
   const diagnosticScore = () => {
@@ -783,6 +896,9 @@
       assessment_mode: skip ? "baseline" : "diagnostic",
       learner: { name: learnerName(), cohort: pack.learner.cohort, target_role: pack.learner.targetRole, level: state.pathLevel },
       available_time_minutes: state.timePlan,
+      sections: assessmentSections(),
+      competencies: pack.competencies,
+      sources: pack.sources,
       answers: skip ? [] : questions.map((question) => ({
         question_id: question.id,
         competency_id: question.competencyId,
@@ -855,9 +971,9 @@
         <path class="road-center" d="${roadmapPath}"/>
         <path class="road-progress" pathLength="100" d="${roadmapPath}" style="stroke-dasharray:${progress} 100"/>
       </svg>
-      ${journeyMicroStops.map((group, segmentIndex) => group.map((point, pointIndex) => { const isDone = Boolean(state.completedSections[pack.sections[segmentIndex].id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
-      ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[index]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(journeyRewards[index].name)}</strong><small>${escapeHtml(journeyRewards[index].note)}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
-      <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${journeyStops[6].x}%;--point-y:${journeyStops[6].y}px;--mobile-y:1640px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp Machine Learning Foundations</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : "Hoàn thành đủ 6 cột mốc để chạm tới chiếc cúp cuối hành trình."}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
+      ${journeyMicroStops.slice(0, pack.sections.length).map((group, segmentIndex) => group.map((point, pointIndex) => { const isDone = Boolean(state.completedSections[pack.sections[segmentIndex].id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
+      ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[Math.min(index, journeyStops.length - 2)]; const reward = journeyRewards[index % journeyRewards.length]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index % journeyRewards.length, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(reward.name)}</strong><small>${escapeHtml(reward.note)}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
+      <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${journeyStops[6].x}%;--point-y:${journeyStops[6].y}px;--mobile-y:1640px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp ${escapeHtml(activeTopicTitle())}</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : `Hoàn thành đủ ${pack.sections.length} cột mốc để chạm tới chiếc cúp cuối hành trình.`}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
       <div class="journey-avatar ${state.roadmapAnimation ? "is-advancing" : ""}" style="--point-x:${avatarStop.x}%;--point-y:${avatarStop.y}px;--mobile-y:${80 + completedCount * 260}px" data-stop="${completedCount}">${animeAvatar()}<span>Bạn đang ở đây</span></div>
     </section>
     <aside class="journey-note"><span class="rationale-icon indigo">${icon("route")}</span><div><strong>Vì sao đi theo thứ tự này?</strong><p>Prerequisite giữ cho mỗi bước vừa sức; mastery test xác nhận bạn thật sự có thể áp dụng trước khi avatar tiến lên. Trạng thái luôn có nhãn và biểu tượng, không chỉ dựa vào màu.</p>${roadmapReferenceLink("Mở tham chiếu AI Engineer")}</div><button class="link-button" type="button" data-view="tutor">Hỏi AI tutor ${icon("arrow")}</button></aside>`;
@@ -897,14 +1013,12 @@
     state.studySlideIndices[section.id] = slideIndex;
     const sourceUrls = Array.isArray(slide.source_urls) ? slide.source_urls : [];
     const sourceCount = sourceUrls.length || (sourceResult?.sources?.length || 0);
-    const sourceLinks = sourceUrls.length ? externalSourceLinks(sourceUrls) : "";
     return `<section class="learning-deck" aria-label="Learning slide deck cho ${escapeHtml(section.title)}">
       <div class="deck-header"><div><span class="content-label">SOURCE-GROUNDED LEARNING DECK</span><h2>Học theo từng slide, hiểu đến nơi</h2><p>Mỗi slide có ý chính, ví dụ, bước áp dụng và nguồn tham chiếu để bạn đọc sâu hơn.</p></div><div class="deck-counter" aria-live="polite"><strong>${String(slideIndex + 1).padStart(2, "0")}</strong><span>/ ${String(slides.length).padStart(2, "0")} slides</span></div></div>
       <div class="deck-stage slide-type-${escapeHtml(slide.type || "concept")}" tabindex="0" aria-label="Slide ${slideIndex + 1}: ${escapeHtml(slide.title)}">
         <div class="deck-stage-top"><span class="deck-slide-type">${escapeHtml(slideTypeLabel(slide.type))}</span><span class="deck-source-count">${icon("shield")} ${sourceCount} nguồn đã lọc</span></div>
         <div class="deck-slide-copy"><h3>${escapeHtml(slide.title)}</h3>${slide.subtitle ? `<p class="deck-slide-subtitle">${escapeHtml(slide.subtitle)}</p>` : ""}<p class="deck-slide-body">${escapeHtml(slide.body)}</p><ul class="deck-bullets">${(slide.bullets || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>
         <div class="deck-takeaway"><span>${icon("spark")} TAKEAWAY</span><strong>${escapeHtml(slide.takeaway)}</strong>${slide.checkpoint ? `<p><b>Tự hỏi:</b> ${escapeHtml(slide.checkpoint)}</p>` : ""}</div>
-        ${sourceLinks ? `<div class="deck-sources"><span>Nguồn của slide</span>${sourceLinks}</div>` : ""}
       </div>
       <div class="deck-controls"><button class="outline-button compact-button" type="button" data-action="prev-slide" aria-label="Slide trước" ${slideIndex === 0 ? "disabled" : ""}>${icon("back")} Trước</button><div class="deck-dots" role="tablist" aria-label="Chọn slide">${slides.map((item, index) => `<button type="button" role="tab" class="deck-dot ${index === slideIndex ? "is-active" : ""}" aria-label="Mở slide ${index + 1}: ${escapeHtml(item.title)}" aria-selected="${index === slideIndex}" data-action="select-slide" data-index="${index}"></button>`).join("")}</div><button class="primary-button compact-button" type="button" data-action="next-slide" aria-label="Slide tiếp theo" ${slideIndex === slides.length - 1 ? "disabled" : ""}>Tiếp theo ${icon("arrow")}</button></div>
       <p class="deck-keyboard-hint">Mẹo: dùng phím ← → để chuyển slide. Đến slide cuối, hoàn thành checklist bên cạnh để mở mastery test.</p>
@@ -1014,7 +1128,7 @@
     const questions = activeMasteryQuestions();
     const failedQuestions = questions.filter((question) => state.masteryAnswers[question.id] !== question.correctIndex).map((question) => ({ id: question.id, prompt: question.prompt, source_ids: question.sourceIds }));
     try {
-      const response = await apiRequest("/api/remediation", { section_id: state.selectedSectionId, score: state.masteryScore, failed_questions: failedQuestions });
+      const response = await apiRequest("/api/remediation", { topic_label: activeTopicTitle(), topic_objective: pack.topic.objective, section_id: state.selectedSectionId, section: getSection(), sections: assessmentSections(), competencies: pack.competencies, sources: pack.sources, score: state.masteryScore, failed_questions: failedQuestions });
       state.remediationData = response.data;
       state.agentMeta = response.meta;
     } catch {
@@ -1156,7 +1270,8 @@
   };
 
   const reset = () => {
-    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, studyContentLoading: "", studySlideIndices: {}, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
+    pack = staticPack;
+    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", topicBlueprint: null, diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, studyContentLoading: "", studySlideIndices: {}, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
     try { localStorage.removeItem(stateStorageKey()); } catch {}
     window.history.replaceState(null, "", "#setup");
     render();
@@ -1187,7 +1302,7 @@
     render();
     let assistant;
     try {
-      const response = await apiRequest("/api/tutor", { topic_id: pack.topic.id, section_id: state.selectedSectionId, message: cleanText });
+      const response = await apiRequest("/api/tutor", { topic_id: pack.topic.id, topic_label: activeTopicTitle(), topic_objective: pack.topic.objective, section_id: state.selectedSectionId, section: getSection(), sections: assessmentSections(), competencies: pack.competencies, sources: pack.sources, message: cleanText });
       assistant = { role: "assistant", text: response.data.answer, sources: response.data.source_ids, confidence: confidenceTier(response.data.confidence) };
       state.agentMeta = response.meta;
     } catch {
@@ -1204,7 +1319,10 @@
   const discoverSectionSources = async (section) => {
     const response = await apiRequest("/api/sources/discover", {
       topic_id: pack.topic.id,
+      topic_label: activeTopicTitle(),
+      topic_objective: pack.topic.objective,
       section_id: section.id,
+      section_objective: section.objective,
       query: `${section.title}. ${section.objective || section.description || "AI Engineer learning section"}`,
     });
     state.discoveredSources[section.id] = response.data;
@@ -1215,7 +1333,10 @@
   const createSectionLearningPackage = async (section, sourceResult) => {
     const response = await apiRequest("/api/learning/package", {
       topic_id: pack.topic.id,
+      topic_label: activeTopicTitle(),
+      topic_objective: pack.topic.objective,
       section_id: section.id,
+      section,
       level: "beginner-to-intermediate",
       minutes: state.timePlan,
       sources: sourceResult.sources,
@@ -1330,6 +1451,7 @@
       state.diagnosticSubmitted = false;
       state.aiAnalysis = null;
       state.recommendedPath = [];
+      state.topicBlueprint = null;
       // New learners keep the baseline roadmap flow. Learners who know the
       // topic already enter the diagnostic test immediately.
       state.diagnosticIndex = 0;
@@ -1340,15 +1462,15 @@
       state.view = "diagnostic-loading";
       window.history.replaceState(null, "", `#${state.view}`);
       render();
-      if (state.diagnosticSkipped) {
-        showToast("Đang tạo roadmap nền tảng từ mục tiêu của bạn.");
-        window.setTimeout(() => submitDiagnostic(true), 720);
-      } else {
-        showToast("Đã ghi nhận mục tiêu. Đang sinh diagnostic theo nội dung.");
-        loadAssessment("diagnostic");
-      }
+      showToast("Đã ghi nhận mục tiêu. Đang tìm nguồn và dựng nội dung theo topic.");
+      prepareTopicBlueprint();
     }
-    if (action === "start-diagnostic") { state.diagnosticSkipped = false; state.diagnosticIndex = 0; if (state.assessmentQuestions.diagnostic.length) setView("diagnostic"); else loadAssessment("diagnostic"); }
+    if (action === "start-diagnostic") {
+      state.diagnosticSkipped = false;
+      state.diagnosticIndex = 0;
+      if (state.assessmentQuestions.diagnostic.length === plannedAssessmentCount("diagnostic")) setView("diagnostic");
+      else { state.assessmentQuestions.diagnostic = []; loadAssessment("diagnostic"); }
+    }
     if (action === "answer-diagnostic") chooseDiagnosticAnswer(Number(target.dataset.index));
     if (action === "diagnostic-confidence") { const question = activeDiagnosticQuestions()[state.diagnosticIndex]; state.diagnosticConfidence[question.id] = target.dataset.value; render(); }
     if (action === "diagnostic-prev" && state.diagnosticIndex > 0) { state.diagnosticIndex -= 1; render(); }

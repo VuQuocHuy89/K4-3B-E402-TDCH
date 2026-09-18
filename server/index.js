@@ -312,6 +312,13 @@ const loadDocument = async () => {
 
 const sourceContext = () => sources.map((item) => `${item.id} | ${item.chapter} | ${item.label} | ${item.summary}`).join("\n");
 const sectionContext = () => sections.map((item) => `${item.id} | ${item.title} | competency=${item.competencyId} | prerequisite=${item.prerequisite || "none"}`).join("\n");
+const dynamicContext = (input = {}) => {
+  const inputSources = Array.isArray(input.sources) ? input.sources : [];
+  const inputSections = Array.isArray(input.sections) ? input.sections : [];
+  const sourceLines = inputSources.map((item) => `${item.id || "source"} | ${item.title || ""} | ${item.publisher || item.domain || ""} | ${item.url || ""}`).join("\n");
+  const sectionLines = inputSections.map((item) => `${item.id || "section"} | ${item.title || ""} | competency=${item.competency_id || item.competencyId || ""} | objective=${item.objective || ""} | sources=${(item.source_ids || item.sourceIds || []).join(",")}`).join("\n");
+  return `\nRuntime topic: ${input.topic_label || input.topic || ""}\nRuntime objective: ${input.topic_objective || input.objective || ""}\nRuntime verified sources:\n${sourceLines || "none"}\nRuntime sections:\n${sectionLines || "none"}`;
+};
 
 const queryTerms = (query) => normalise(query).split(/[^a-z0-9]+/).filter((term) => term.length > 2);
 const relevantDocumentContext = (query, maxPages = 3) => {
@@ -337,7 +344,8 @@ ${sectionContext()}
 Document-grounded excerpts from ${topicContext.documentName}:
 ${relevantDocumentContext(JSON.stringify(input))}
 
-External orientation reference (link only; do not reproduce its content): ${roadmapReference.url}`;
+External orientation reference (link only; do not reproduce its content): ${roadmapReference.url}
+${dynamicContext(input)}`;
 
 const schemas = {
   analyze: {
@@ -394,12 +402,7 @@ const schemas = {
 const assessmentCount = (input) => {
   const mode = input.mode || "diagnostic";
   const inputSections = Array.isArray(input.sections) ? input.sections : [];
-  if (mode === "mastery") {
-    const section = inputSections.find((item) => item.id === input.section_id);
-    return Math.max(3, Math.min(8, (section?.concepts?.length || section?.checklist?.length || 2) * 2));
-  }
-  const perSection = mode === "final" ? 2 : 2;
-  return Math.max(mode === "final" ? 6 : 4, Math.min(mode === "final" ? 24 : 20, Math.max(1, inputSections.length) * perSection));
+  return assessmentCountForSections(mode, inputSections, input.section_id);
 };
 
 const assessmentLabel = (mode) => mode === "mastery" ? "Section mastery" : mode === "final" ? "Topic transfer" : "Diagnostic";
@@ -412,7 +415,7 @@ const fallbackAssessment = (input) => {
   const questions = [];
   const addQuestion = (question, section, index) => {
     if (!section || questions.length >= desired) return;
-    const sourceIds = validSources(question.source_ids || question.sourceIds || section.source_ids || section.sourceIds);
+    const sourceIds = validSources(question.source_ids || question.sourceIds || section.source_ids || section.sourceIds, input);
     if (!sourceIds.length) return;
     const concepts = Array.isArray(section.concepts) ? section.concepts : [];
     const concept = concepts[index % Math.max(1, concepts.length)] || { title: "mục tiêu section", body: section.objective || section.title };
@@ -458,7 +461,8 @@ const fetchJson = async (url, options, timeoutMs = Number(process.env.AI_TIMEOUT
 
 const callProvider = async (name, route, input) => {
   const modelInput = route === "assessment" ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== "fallback_questions")) : input;
-  const prompt = `Complete this bounded task using the mapped PDF evidence. Return exactly one JSON object matching this schema and field names: ${JSON.stringify(schemas[route])}. Input: ${JSON.stringify(modelInput)}`;
+  const assessmentInstruction = route === "assessment" ? `For the assessment, generate exactly ${assessmentCount(input)} distinct questions. Cover every runtime section and competency at least once, distribute additional questions toward sections with more concepts/checklist items, use only the verified source_ids attached to each section, and keep one objectively correct option per question.` : "";
+  const prompt = `Complete this bounded task using the mapped PDF or web evidence. ${assessmentInstruction} Return exactly one JSON object matching this schema and field names: ${JSON.stringify(schemas[route])}. Input: ${JSON.stringify(modelInput)}`;
   if (name === "gemini") {
     const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     const response = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor(name))}:generateContent`, {
@@ -488,16 +492,26 @@ const callProvider = async (name, route, input) => {
 };
 
 const sectionForCompetency = (id) => sections.find((item) => item.competencyId === id);
-const validSources = (ids = []) => [...new Set((Array.isArray(ids) ? ids : []).filter((id) => sourceIds.has(id)))];
-const safeAnalysis = (data) => ({
+const runtimeSourceIds = (input = {}) => new Set([
+  ...sourceIds,
+  ...(Array.isArray(input.sources) ? input.sources.map((source) => source.id).filter(Boolean) : []),
+  ...(Array.isArray(input.sections) ? input.sections.flatMap((section) => section.source_ids || section.sourceIds || []) : []),
+]);
+const runtimeSectionIds = (input = {}) => new Set([...sectionIds, ...(Array.isArray(input.sections) ? input.sections.map((section) => section.id).filter(Boolean) : [])]);
+const runtimeCompetencyIds = (input = {}) => new Set([...competencyIds, ...(Array.isArray(input.competencies) ? input.competencies.map((competency) => competency.id).filter(Boolean) : [])]);
+const validSources = (ids = [], input = {}) => {
+  const allowed = runtimeSourceIds(input);
+  return [...new Set((Array.isArray(ids) ? ids : []).filter((id) => allowed.has(id)))];
+};
+const safeAnalysis = (data, input = {}) => ({
   ...data,
   roadmap_ref: roadmapReference,
   confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)),
-  competency_gaps: (Array.isArray(data.competency_gaps) ? data.competency_gaps : []).filter((item) => competencyIds.has(item.competency_id)).map((item) => ({ ...item, source_ids: validSources(item.source_ids) })),
-  recommended_path: (Array.isArray(data.recommended_path) ? data.recommended_path : []).filter((item) => sectionIds.has(item.section_id)).map((item) => ({ ...item, estimated_minutes: Number(item.estimated_minutes) || sections.find((section) => section.id === item.section_id).duration })),
+  competency_gaps: (Array.isArray(data.competency_gaps) ? data.competency_gaps : []).filter((item) => runtimeCompetencyIds(input).has(item.competency_id)).map((item) => ({ ...item, source_ids: validSources(item.source_ids, input) })),
+  recommended_path: (Array.isArray(data.recommended_path) ? data.recommended_path : []).filter((item) => runtimeSectionIds(input).has(item.section_id)).map((item) => ({ ...item, estimated_minutes: Number(item.estimated_minutes) || (input.sections || sections).find((section) => section.id === item.section_id)?.duration || 20 })),
 });
-const safeTutor = (data) => ({ ...data, confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)), source_ids: validSources(data.source_ids) });
-const safeRemediation = (data) => ({ ...data, confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)), source_ids: validSources(data.source_ids), micro_tasks: Array.isArray(data.micro_tasks) ? data.micro_tasks.slice(0, 4) : [] });
+const safeTutor = (data, input = {}) => ({ ...data, confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)), source_ids: validSources(data.source_ids, input) });
+const safeRemediation = (data, input = {}) => ({ ...data, confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)), source_ids: validSources(data.source_ids, input), micro_tasks: Array.isArray(data.micro_tasks) ? data.micro_tasks.slice(0, 4) : [] });
 const safeAssessment = (data, input) => {
   const inputSections = Array.isArray(input.sections) ? input.sections : [];
   const sectionMap = new Map(inputSections.filter((section) => section?.id).map((section) => [section.id, section]));
@@ -507,15 +521,16 @@ const safeAssessment = (data, input) => {
     if (!section) return null;
     const options = Array.isArray(question.options) ? question.options.map((option) => String(option || "").trim()).filter(Boolean).slice(0, 4) : [];
     const prompt = String(question.prompt || "").trim();
-    const sourceIds = validSources(question.source_ids).filter((id) => !(section.source_ids || section.sourceIds) || (section.source_ids || section.sourceIds).includes(id));
+    const sourceIds = validSources(question.source_ids, input).filter((id) => !(section.source_ids || section.sourceIds) || (section.source_ids || section.sourceIds).includes(id));
     const correctIndex = Number(question.correct_index);
     const promptKey = normalise(prompt);
     if (!prompt || options.length !== 4 || !Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3 || !sourceIds.length || seen.has(promptKey)) return null;
     seen.add(promptKey);
+    const competencyId = section.competency_id || section.competencyId || question.competency_id;
     return {
       id: String(question.id || `${input.mode || "assessment"}-${index + 1}`),
       section_id: section.id,
-      competency_id: competencyIds.has(section.competency_id || section.competencyId || question.competency_id) ? (section.competency_id || section.competencyId || question.competency_id) : "ml-foundations",
+      competency_id: runtimeCompetencyIds(input).has(competencyId) ? competencyId : input.competencies?.[0]?.id || "ml-foundations",
       label: String(question.label || assessmentLabel(input.mode)).slice(0, 80),
       prompt: prompt.slice(0, 500),
       options,
@@ -539,7 +554,7 @@ const validateProviderResult = (route, data, input = {}) => {
 const sourceDiscoveryPrompt = (input) => {
   const section = sections.find((item) => item.id === input.section_id);
   const topic = section ? `${section.title}. ${section.sourceIds.join(", ")}` : input.query;
-  return `You are a source curator for an AI Engineer learning path. Find a small set of trustworthy, current learning sources for this section: ${topic}. Prefer official documentation, official courses, universities, standards, or original research. Do not recommend generic SEO blogs, social posts, or sources you cannot verify. Return JSON only with this shape: {"sources":[{"title":"...","publisher":"...","url":"https://...","domain":"...","type":"Official documentation|Official course|Academic paper|University material","summary":"...","why_selected":"..."}],"note":"..."}. Every URL must be https and must be on one of these preferred domains when relevant: developers.google.com, scikit-learn.org, pytorch.org, tensorflow.org, huggingface.co, docs.python.org, kaggle.com, arxiv.org, or a university domain. Query: ${JSON.stringify(input.query || "")}`;
+  return `You are a source curator for a learning path about ${input.topic_label || input.topic || "the requested topic"}. Find a small set of trustworthy, current learning sources for this section or query: ${topic}. Use the section objective when provided: ${input.section_objective || input.topic_objective || ""}. Prefer official documentation, official courses, universities, standards, original research, and respected project documentation. Do not recommend generic SEO blogs, social posts, or sources you cannot verify. Return JSON only with this shape: {"sources":[{"title":"...","publisher":"...","url":"https://...","domain":"...","type":"Official documentation|Official course|Academic paper|University material","summary":"...","why_selected":"..."}],"note":"..."}. Every URL must be https. Query: ${JSON.stringify(input.query || "")}`;
 };
 
 const sourceDiscoverySchema = {
@@ -549,6 +564,19 @@ const sourceDiscoverySchema = {
     note: { type: "string" },
   },
   required: ["sources", "note"],
+};
+
+const learningBlueprintSchema = {
+  type: "object",
+  properties: {
+    status: { type: "string" },
+    topic: { type: "object", properties: { title: { type: "string" }, objective: { type: "string" }, duration: { type: "string" } }, required: ["title", "objective"] },
+    sources: { type: "array", items: { type: "object", properties: { title: { type: "string" }, publisher: { type: "string" }, url: { type: "string" }, domain: { type: "string" }, type: { type: "string" }, summary: { type: "string" }, why_selected: { type: "string" } }, required: ["title", "publisher", "url", "summary"] } },
+    competencies: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, source_ids: { type: "array", items: { type: "string" } } }, required: ["id", "title", "summary", "source_ids"] } },
+    sections: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, eyebrow: { type: "string" }, objective: { type: "string" }, description: { type: "string" }, prerequisite: { type: "string" }, duration: { type: "integer" }, competency_id: { type: "string" }, source_ids: { type: "array", items: { type: "string" } }, concepts: { type: "array", items: { type: "object", properties: { title: { type: "string" }, body: { type: "string" } }, required: ["title", "body"] } }, checklist: { type: "array", items: { type: "string" } } }, required: ["id", "title", "objective", "duration", "competency_id", "source_ids", "concepts", "checklist"] } },
+    roadmap_ref: { type: "object", properties: { label: { type: "string" }, url: { type: "string" }, note: { type: "string" } } },
+  },
+  required: ["status", "topic", "sources", "competencies", "sections"],
 };
 
 const learningPackageSchema = {
@@ -639,6 +667,157 @@ const runSourceDiscovery = async (input) => {
   return { data: { status: "catalog", query: input.query || "", note: "Tạm dùng catalog nguồn chính thống đã kiểm duyệt; bạn có thể tìm lại khi AI provider sẵn sàng.", sources: fallbackSources }, meta };
 };
 
+const blueprintPrompt = (input) => [
+  "You are a curriculum architect for Pathwise. Build a grounded learning blueprint for the learner's requested topic, not a fixed Machine Learning curriculum.",
+  "Use web search to find current, trustworthy sources and use https://roadmap.sh/ai-engineer only as an external orientation when it is relevant; do not copy its content.",
+  "Prefer official documentation, official courses, universities, standards, original research, and respected project documentation.",
+  "Topic: " + JSON.stringify(input.topic || input.topic_label || ""),
+  "Learner level: " + JSON.stringify(input.level || "beginner"),
+  "Available minutes per day: " + JSON.stringify(input.minutes || 30),
+  "Learner objective: " + JSON.stringify(input.objective || "Build practical understanding and apply the topic in an AI Engineer workflow."),
+  "Return JSON only matching this schema: " + JSON.stringify(learningBlueprintSchema),
+  "Create 4-6 ordered sections based on the actual breadth of the requested topic and the available time. Each section must have one distinct competency, prerequisite, objective, 2-4 concepts, 2-4 observable checklist items, and 10-90 estimated minutes. Use stable short ids inside this response.",
+  "Return 5-10 verified https source URLs. Every section and competency must cite one or more source_ids from that source list. Keep the blueprint specific to the requested topic and do not invent citations.",
+].join("\n\n");
+
+const callBlueprintProvider = async (name, input) => {
+  const prompt = blueprintPrompt(input);
+  if (name === "gemini") {
+    const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const response = await fetchJson("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelFor(name)) + ":generateContent", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: "Use Google Search grounding. Verify every source URL. Return only the requested JSON and do not copy long passages." }] },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: { temperature: 0.15, responseMimeType: "application/json", responseSchema: learningBlueprintSchema },
+      }),
+    }, Number(process.env.BLUEPRINT_TIMEOUT_MS || 15000));
+    return { data: parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("")), prompt };
+  }
+  const response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: "Bearer " + process.env.OPENROUTER_API_KEY },
+    body: JSON.stringify({
+      model: modelFor(name),
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.15,
+      max_tokens: Number(process.env.BLUEPRINT_MAX_TOKENS || 5000),
+      response_format: { type: "json_object" },
+      tools: [{ type: "openrouter:web_search", parameters: { engine: "auto", max_results: 8, max_total_results: 8, search_context_size: "high" } }],
+    }),
+  }, Number(process.env.BLUEPRINT_TIMEOUT_MS || 15000));
+  const content = response.choices?.[0]?.message?.content;
+  return { data: parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content), prompt };
+};
+
+const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || min));
+const sectionQuestionCount = (section) => clamp(Math.ceil(((section?.concepts?.length || 0) + (section?.checklist?.length || 0)) / 3), 1, 3);
+const assessmentCountForSections = (mode, inputSections = [], sectionId = "") => {
+  if (mode === "mastery") {
+    const section = inputSections.find((item) => item.id === sectionId) || inputSections[0];
+    return clamp(Math.max(3, (section?.concepts?.length || section?.checklist?.length || 2) * 2), 3, 8);
+  }
+  const diagnostic = inputSections.reduce((total, section) => total + sectionQuestionCount(section), 0);
+  const minimum = Math.max(4, inputSections.length || 1);
+  return mode === "final" ? clamp(Math.ceil(diagnostic / 2), Math.min(minimum, diagnostic || minimum), 24) : clamp(diagnostic, minimum, 24);
+};
+
+const normalizeBlueprint = (data, input) => {
+  if (!data || typeof data !== "object") throw new Error("blueprint_invalid_object");
+  const rawSources = sanitizeSources(data.sources, 10, { allowAnyHttps: true });
+  if (rawSources.length < 3) throw new Error("blueprint_insufficient_sources");
+  const sourceIdMap = new Map(rawSources.map((source, index) => [source.id, "topic-source-" + (index + 1)]));
+  const normalizedSources = rawSources.map((source, index) => ({ ...source, id: "topic-source-" + (index + 1), provenance: "web-grounded-blueprint" }));
+  const allSourceIds = normalizedSources.map((source) => source.id);
+  const sourceIdsFor = (ids) => {
+    const mapped = (Array.isArray(ids) ? ids : []).map((id) => sourceIdMap.get(id) || (allSourceIds.includes(id) ? id : "")).filter(Boolean);
+    return [...new Set(mapped.length ? mapped : allSourceIds.slice(0, 2))];
+  };
+  const rawCompetencies = Array.isArray(data.competencies) ? data.competencies : [];
+  const competencyIdMap = new Map(rawCompetencies.map((item, index) => [item.id, "topic-competency-" + (index + 1)]));
+  const normalizedCompetencies = rawCompetencies.slice(0, 10).map((item, index) => ({
+    id: "topic-competency-" + (index + 1),
+    title: String(item.title || "Competency " + (index + 1)).slice(0, 120),
+    summary: String(item.summary || "Năng lực cần đạt trong topic.").slice(0, 260),
+    sourceIds: sourceIdsFor(item.source_ids),
+    mastery: 0,
+    status: index === 0 ? "current" : "locked",
+    statusLabel: index === 0 ? "Chưa đánh giá" : "Chưa mở",
+    color: ["indigo", "mint", "coral", "slate"][index % 4],
+  }));
+  if (!normalizedCompetencies.length) throw new Error("blueprint_no_competencies");
+  const competencyIds = new Set(normalizedCompetencies.map((item) => item.id));
+  const rawSections = Array.isArray(data.sections) ? data.sections : [];
+  if (!rawSections.length) throw new Error("blueprint_no_sections");
+  const sectionIdMap = new Map(rawSections.map((item, index) => [item.id, "topic-section-" + (index + 1)]));
+  const normalizedSections = rawSections.slice(0, 6).map((item, index) => {
+    const competencyId = competencyIdMap.get(item.competency_id) || normalizedCompetencies[index % normalizedCompetencies.length].id;
+    const concepts = (Array.isArray(item.concepts) ? item.concepts : []).slice(0, 4).map((concept) => ({ title: String(concept.title || "Khái niệm cốt lõi").slice(0, 140), body: String(concept.body || "").slice(0, 700) })).filter((concept) => concept.body);
+    const checklist = (Array.isArray(item.checklist) ? item.checklist : []).slice(0, 4).map((value) => String(value).slice(0, 220)).filter(Boolean);
+    const prerequisite = sectionIdMap.get(item.prerequisite) || (index > 0 ? "topic-section-" + index : null);
+    return {
+      id: "topic-section-" + (index + 1),
+      number: String(index + 1).padStart(2, "0"),
+      competencyId: competencyIds.has(competencyId) ? competencyId : normalizedCompetencies[0].id,
+      title: String(item.title || "Section " + (index + 1)).slice(0, 160),
+      eyebrow: String(item.eyebrow || "LEARNING SECTION").slice(0, 80),
+      duration: clamp(item.duration, 10, 90),
+      status: index === 0 ? "current" : index === 1 ? "next" : "locked",
+      prerequisite,
+      description: String(item.description || item.objective || "").slice(0, 600),
+      objective: String(item.objective || item.title || "").slice(0, 600),
+      concepts: concepts.length ? concepts : [{ title: "Khái niệm cốt lõi", body: String(item.objective || item.title || "").slice(0, 500) }],
+      example: String(item.example || "").slice(0, 800),
+      checklist: checklist.length ? checklist : ["Giải thích được khái niệm chính", "Nêu được một ví dụ áp dụng"],
+      sourceIds: sourceIdsFor(item.source_ids),
+      masteryQuestions: [],
+    };
+  });
+  const diagnosticCount = assessmentCountForSections("diagnostic", normalizedSections);
+  return {
+    status: "ok",
+    topic: {
+      id: "topic-" + crypto.createHash("sha1").update(String(input.topic || input.topic_label || data.topic?.title || "topic")).digest("hex").slice(0, 12),
+      title: String(data.topic?.title || input.topic || input.topic_label || "Learning topic").slice(0, 160),
+      day: "AI-generated learning path",
+      module: "Adaptive learning",
+      documentName: "Web-grounded sources",
+      objective: String(data.topic?.objective || input.objective || "Học và áp dụng topic theo mục tiêu thực tế.").slice(0, 700),
+      duration: String(data.topic?.duration || normalizedSections.reduce((total, section) => total + section.duration, 0) + " phút nội dung cốt lõi").slice(0, 120),
+      progress: 0,
+      passMark: 80,
+      roadmapRef: roadmapReference,
+    },
+    sources: normalizedSources,
+    competencies: normalizedCompetencies,
+    sections: normalizedSections,
+    diagnosticQuestions: [],
+    finalQuestions: [],
+    assessmentCounts: { diagnostic: diagnosticCount, final: clamp(Math.ceil(diagnosticCount / 2), 6, 24) },
+    roadmapRef: roadmapReference,
+  };
+};
+
+const runBlueprint = async (input) => {
+  const started = Date.now();
+  const requestId = crypto.randomUUID();
+  const attempts = [];
+  for (const candidate of providerOrder()) {
+    try {
+      const result = await callBlueprintProvider(candidate, input);
+      const data = normalizeBlueprint(result.data, input);
+      const meta = { request_id: requestId, route: "blueprint", provider: candidate, model: modelFor(candidate), live: true, fallback_reason: null, attempts, latency_ms: Date.now() - started };
+      await writeTrace({ ...meta, input, prompt: result.prompt, output: data });
+      return { data, meta };
+    } catch (error) {
+      attempts.push({ provider: candidate, reason: error.name === "AbortError" ? "timeout" : error.message });
+    }
+  }
+  return { data: null, meta: { request_id: requestId, route: "blueprint", provider: "static-catalog", model: null, live: false, fallback_reason: attempts[attempts.length - 1]?.reason || "no_provider_configured", attempts, latency_ms: Date.now() - started } };
+};
+
 const packagePrompt = (input, section, sourcesForPackage) => `You are a bounded Vietnamese instructional designer for an AI Engineer learning path. Create a substantial, beginner-friendly learning package for the section below using only the provided verified sources. Do not invent facts, URLs, learner scores, or citations. The package should fit about ${input.minutes || section.duration} minutes and be readable as an interactive slide deck, not as a short summary. Return JSON only matching this schema: ${JSON.stringify(learningPackageSchema)}.
 
 Section: ${JSON.stringify({ title: section.title, objective: section.objective || section.title, source_ids: section.sourceIds })}
@@ -706,9 +885,9 @@ const fallbackLearningPackage = (section, sourcesForPackage) => ({
 const runLearningPackage = async (input) => {
   const started = Date.now();
   const requestId = crypto.randomUUID();
-  const section = sections.find((item) => item.id === input.section_id);
+  const section = input.section && typeof input.section === "object" ? input.section : sections.find((item) => item.id === input.section_id);
   if (!section) return { data: { status: "no_evidence", reason: "section_not_found" }, meta: { request_id: requestId, route: "learning-package", live: false } };
-  const sourcesForPackage = sanitizeSources(input.sources, 6);
+  const sourcesForPackage = sanitizeSources(input.sources, 8, { allowAnyHttps: true });
   if (!sourcesForPackage.length) return { data: fallbackLearningPackage(section, discoverCatalogSources(section.title, 3)), meta: { request_id: requestId, route: "learning-package", provider: "curated-catalog", live: false, fallback_reason: "no_verified_sources", latency_ms: Date.now() - started } };
   const attempts = [];
   for (const candidate of providerOrder()) {
@@ -720,14 +899,14 @@ const runLearningPackage = async (input) => {
         response = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor(candidate))}:generateContent`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: "Use only the verified sources in the request. Return JSON only." }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: learningPackageSchema } }),
+          body: JSON.stringify({ systemInstruction: { parts: [{ text: "Use only the verified sources in the request, and use Google Search grounding to read those sources when needed. Return JSON only." }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: learningPackageSchema } }),
         });
         response = parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(""));
       } else {
         response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
-          body: JSON.stringify({ model: modelFor(candidate), messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: Number(process.env.LEARNING_PACKAGE_MAX_TOKENS || 3200), response_format: { type: "json_object" } }),
+          body: JSON.stringify({ model: modelFor(candidate), messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: Number(process.env.LEARNING_PACKAGE_MAX_TOKENS || 3200), response_format: { type: "json_object" }, tools: [{ type: "openrouter:web_search", parameters: { engine: "auto", max_results: 6, max_total_results: 6, search_context_size: "high" } }] }),
         });
         const content = response.choices?.[0]?.message?.content;
         response = parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content);
@@ -746,8 +925,30 @@ const runLearningPackage = async (input) => {
   return { data, meta };
 };
 
+const fallbackAnalyze = (input) => {
+  const inputCompetencies = Array.isArray(input.competencies) && input.competencies.length ? input.competencies : competencies;
+  const inputSections = Array.isArray(input.sections) && input.sections.length ? input.sections : sections;
+  const competencyMap = new Map(inputCompetencies.map((item) => [item.id, item]));
+  const wrong = (input.answers || []).filter((answer) => answer.is_correct === false);
+  const gapIds = [...new Set(wrong.map((answer) => answer.competency_id).filter((id) => competencyMap.has(id)))];
+  const selectedSections = inputSections.filter((section) => gapIds.includes(section.competency_id || section.competencyId));
+  const firstSection = inputSections[0];
+  return {
+    status: "ok",
+    confidence: 0.78,
+    competency_gaps: (gapIds.length ? gapIds : [firstSection?.competency_id || firstSection?.competencyId]).filter(Boolean).map((id) => {
+      const competency = competencyMap.get(id) || inputCompetencies[0];
+      return { competency_id: id, severity: gapIds.includes(id) ? "high" : "unknown", reason: "Diagnostic cho thấy cần củng cố " + (competency?.title || "năng lực nền tảng") + " trước khi học phần phụ thuộc.", source_ids: competency?.sourceIds || competency?.source_ids || [] };
+    }),
+    recommended_path: (selectedSections.length ? selectedSections : [firstSection]).filter(Boolean).map((section) => ({ section_id: section.id, reason: "Ưu tiên " + section.title + " theo tín hiệu diagnostic và prerequisite.", estimated_minutes: Number(section.duration) || 20 })),
+    next_action: "study",
+    reason: gapIds.length ? "Đã sắp xếp " + gapIds.length + " competency cần ưu tiên từ kết quả diagnostic." : "Diagnostic chưa chỉ ra gap rõ; bắt đầu từ nền tảng để xác nhận cách đặt bài toán.",
+  };
+};
+
 const fallback = (route, input) => {
   if (route === "assessment") return fallbackAssessment(input);
+  if (route === "analyze") return fallbackAnalyze(input);
   if (route === "tutor") {
     const question = normalise(input.message);
     if (["luong", "bong da", "thoi tiet", "dat ve", "luong"].some((term) => question.includes(term))) return { status: "no_evidence", answer: "Mình chưa có căn cứ trong tài liệu Grokking Machine Learning cho câu hỏi này, nên không nên đoán. Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting, classification hoặc model evaluation.", confidence: 0.08, source_ids: [], handoff: "Đổi câu hỏi về phạm vi tài liệu hoặc hỏi mentor." };
@@ -762,9 +963,9 @@ const fallback = (route, input) => {
     return { status: "no_evidence", answer: "Mình chưa đủ tín hiệu để trả lời chắc từ phần tài liệu đã map. Hãy hỏi cụ thể hơn về cách đặt bài toán, loại learning, regression, overfitting hoặc đánh giá classification.", confidence: 0.35, source_ids: [], handoff: "Thu hẹp câu hỏi về một khái niệm trong tài liệu." };
   }
   if (route === "remediation") {
-    const section = sections.find((item) => item.id === input.section_id) || sections[0];
-    const competency = competencies.find((item) => item.id === section.competencyId);
-    return { status: "ok", explanation: `Ôn lại ${competency.title} bằng định nghĩa, một ví dụ và một quyết định mô hình. Sau đó tự giải thích lại trước khi retest.`, micro_tasks: ["Viết định nghĩa khái niệm bằng một câu.", "Nêu một ví dụ dữ liệu hoặc sản phẩm.", "Chọn một cách kiểm tra model và giải thích lý do."], transfer_question: `Trong một bài toán AI Engineer thực tế, bạn sẽ áp dụng ${competency.title} ở bước nào?`, source_ids: competency.sourceIds, confidence: 0.74 };
+    const section = input.section && typeof input.section === "object" ? input.section : sections.find((item) => item.id === input.section_id) || sections[0];
+    const competency = (Array.isArray(input.competencies) ? input.competencies : competencies).find((item) => item.id === (section.competencyId || section.competency_id)) || competencies[0];
+    return { status: "ok", explanation: `Ôn lại ${competency.title} bằng định nghĩa, một ví dụ và một quyết định mô hình. Sau đó tự giải thích lại trước khi retest.`, micro_tasks: ["Viết định nghĩa khái niệm bằng một câu.", "Nêu một ví dụ dữ liệu hoặc sản phẩm.", "Chọn một cách kiểm tra kết quả và giải thích lý do."], transfer_question: `Trong một bài toán thực tế, bạn sẽ áp dụng ${competency.title} ở bước nào?`, source_ids: competency.sourceIds || competency.source_ids || [], confidence: 0.74 };
   }
   const wrong = (input.answers || []).filter((answer) => answer.is_correct === false);
   const gapIds = [...new Set(wrong.map((answer) => answer.competency_id).filter((id) => competencyIds.has(id)))];
@@ -790,7 +991,7 @@ const runAgent = async (route, input) => {
   for (const candidate of providerOrder()) {
     try {
       const providerResult = await callProvider(candidate, route, input);
-      data = validateProviderResult(route, providerResult.data);
+      data = validateProviderResult(route, providerResult.data, input);
       modelTrace = { prompt: providerResult.prompt, rawResponse: providerResult.rawResponse };
       selectedProvider = candidate;
       live = true;
@@ -800,9 +1001,9 @@ const runAgent = async (route, input) => {
     }
   }
   if (!data) data = fallback(route, input);
-  if (route === "analyze") data = safeAnalysis(data);
-  if (route === "tutor") data = safeTutor(data);
-  if (route === "remediation") data = safeRemediation(data);
+  if (route === "analyze") data = safeAnalysis(data, input);
+  if (route === "tutor") data = safeTutor(data, input);
+  if (route === "remediation") data = safeRemediation(data, input);
   if (route === "assessment") data = safeAssessment(data, input);
   if (route === "assessment" && data.questions.length < assessmentCount(input)) {
     data = fallbackAssessment(input);
@@ -910,6 +1111,7 @@ const api = async (req, res, url) => {
     }
   }
   const route = pathname === "/api/learning/analyze" ? "analyze" : pathname === "/api/tutor" ? "tutor" : pathname === "/api/remediation" ? "remediation" : null;
+  if (pathname === "/api/learning/blueprint") return json(res, 200, await runBlueprint(input));
   if (pathname === "/api/learning/assessment") return json(res, 200, await runAgent("assessment", input));
   if (pathname === "/api/sources/discover") return json(res, 200, await runSourceDiscovery(input));
   if (pathname === "/api/learning/package") return json(res, 200, await runLearningPackage(input));

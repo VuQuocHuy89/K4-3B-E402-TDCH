@@ -152,8 +152,13 @@ const isAllowedUrl = (value) => {
   }
 };
 
-const sanitizeSources = (items, maxResults = 5) => {
+const isHttpsUrl = (value) => {
+  try { return new URL(value).protocol === "https:"; } catch { return false; }
+};
+
+const sanitizeSources = (items, maxResults = 5, options = {}) => {
   if (!Array.isArray(items)) return [];
+  const allowAnyHttps = Boolean(options.allowAnyHttps);
   return items.map((item, index) => ({
     id: String(item.id || `web-source-${index + 1}`).slice(0, 80),
     title: String(item.title || "Untitled source").slice(0, 180),
@@ -164,7 +169,7 @@ const sanitizeSources = (items, maxResults = 5) => {
     summary: String(item.summary || "").slice(0, 500),
     why_selected: String(item.why_selected || "Được chọn vì có liên quan tới section đang học.").slice(0, 300),
     provenance: String(item.provenance || "web-grounded").slice(0, 40),
-    verified: isAllowedUrl(item.url),
+    verified: allowAnyHttps ? isHttpsUrl(item.url) : isAllowedUrl(item.url),
   })).filter((item) => item.verified).slice(0, maxResults);
 };
 
