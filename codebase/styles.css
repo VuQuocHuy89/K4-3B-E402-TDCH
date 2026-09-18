@@ -281,7 +281,7 @@ button, a { touch-action: manipulation; }
 
 /* First-run path setup */
 
-.is-onboarding .main-content { max-width: 1180px; margin-inline: auto; }
+.is-onboarding .main-content { max-width: 1440px; margin-inline: auto; padding-inline: clamp(13px, 2.6vw, 40px); }
 .setup-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(260px, .65fr); gap: 18px; align-items: start; }
 .setup-main { padding: 26px; }
 .setup-step { display: grid; grid-template-columns: 34px 1fr; gap: 13px; align-items: start; margin-bottom: 18px; }
@@ -362,7 +362,7 @@ button, a { touch-action: manipulation; }
 /* Full-height workspace navigation */
 .app-body { min-height: 100dvh; }
 .is-onboarding .primary-nav { display: none; }
-.is-onboarding .main-content { max-width: 1180px; margin-inline: auto; }
+.is-onboarding .main-content { max-width: 1440px; margin-inline: auto; padding-inline: clamp(13px, 2.6vw, 40px); }
 .sidebar { position: sticky; top: 0; height: 100dvh; min-height: 0; flex: 0 0 256px; width: 256px; padding: 18px 12px 12px; overflow-y: auto; background: #f0f2f7; transition: width var(--ease), flex-basis var(--ease), transform var(--ease); }
 .sidebar-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 24px; }
 .sidebar .brand { min-width: 0; gap: 9px; padding-left: 4px; }
