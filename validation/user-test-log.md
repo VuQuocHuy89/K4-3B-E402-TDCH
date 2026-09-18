@@ -1,54 +1,31 @@
-# Validation — R6 · Cho người ngoài dùng thử
+# Validation — R6
 
-> Ghi kết quả dùng thử thật ở CP5. Không điền dữ liệu giả. Có thể ẩn danh người dùng bằng `U01`, `U02`, … nếu cần bảo vệ thông tin cá nhân.
+> Ghi kết quả dùng thử thật với 5 người ngoài nhóm. Có thể ẩn danh bằng `U01`, `U02`, …
 
-## 1. Mục tiêu validation
+## Nhật ký dùng thử
 
-- Sản phẩm/flow được kiểm tra: Pathwise — diagnostic → knowledge gap → learning path.
-- Người phụ trách: Tống Trần Dũng.
-- Thời gian thực hiện: `[dd/mm/yyyy, hh:mm]`
-- Tiêu chí cần kiểm tra: người học có hoàn thành được task, hiểu lý do của roadmap và biết bước tiếp theo hay không.
+**Sản phẩm:** Pathwise — diagnostic → knowledge gap → learning path  
+**Thời gian:** `[dd/mm/yyyy]` · **Người phụ trách:** `[tên]`
 
-## 2. Danh sách người dùng
+**Task giao:** Nhập mục tiêu học, hoàn thành diagnostic, xem learning path và nói lại section nên học trước cùng lý do.
 
-| Mã | Vai trò | Đã khai báo từ CP1? | Hình thức thử | Thời gian |
-|---|---|---:|---|---|
-| U01 | `[học viên/người học]` | Có/Không | `[trực tiếp/online]` | `[ ]` |
-| U02 | `[học viên/người học]` | Có/Không | `[trực tiếp/online]` | `[ ]` |
-| U03 | `[học viên/người học]` | Có/Không | `[trực tiếp/online]` | `[ ]` |
-| U04 | `[học viên/người học]` | Có/Không | `[trực tiếp/online]` | `[ ]` |
-| U05 | `[học viên/người học]` | Có/Không | `[trực tiếp/online]` | `[ ]` |
-
-> Phải có đủ 5 người ngoài nhóm; trong đó ít nhất 2 người phải là willing user đã khai báo từ CP1.
-
-## 3. Task giao cho người dùng
-
-1. Nhập mục tiêu học AI Engineer, nền tảng hiện tại và thời lượng học.
-2. Hoàn thành diagnostic.
-3. Đọc learning path được đề xuất và nói lại section nên học trước cùng lý do.
-4. `[Nếu có thời gian: học một section, làm mastery test và thử luồng chưa đạt 80%.]`
-
-## 4. Nhật ký validation
-
-| Người dùng | Task | Quan sát/điểm bị kẹt | Quote nguyên văn | Quyết định sau test |
+| Người dùng | Đã khai báo CP1? | Điểm bị kẹt/quan sát | Quote nguyên văn | Quyết định |
 |---|---|---|---|---|
-| U01 | `[ ]` | `[ ]` | `“[ghi đúng nguyên văn]”` | `[ ]` |
-| U02 | `[ ]` | `[ ]` | `“[ghi đúng nguyên văn]”` | `[ ]` |
-| U03 | `[ ]` | `[ ]` | `“[ghi đúng nguyên văn]”` | `[ ]` |
-| U04 | `[ ]` | `[ ]` | `“[ghi đúng nguyên văn]”` | `[ ]` |
-| U05 | `[ ]` | `[ ]` | `“[ghi đúng nguyên văn]”` | `[ ]` |
+| U01 | Có/Không | `[ ]` | `“[ ]”` | `[ ]` |
+| U02 | Có/Không | `[ ]` | `“[ ]”` | `[ ]` |
+| U03 | Có/Không | `[ ]` | `“[ ]”` | `[ ]` |
+| U04 | Có/Không | `[ ]` | `“[ ]”` | `[ ]` |
+| U05 | Có/Không | `[ ]` | `“[ ]”` | `[ ]` |
 
-## 5. Tổng hợp kết quả
+## Tổng kết
 
-- Chủ đề/vấn đề lặp lại nhiều nhất: `[ ]`
-- Sẽ sửa gì trước demo: `[ ]`
-- Giữ nguyên gì và vì sao: `[ ]`
-- Việc để dành sau hackathon: `[ ]`
+- Vấn đề lặp lại nhiều nhất: `[ ]`
+- Sẽ sửa trước demo: `[ ]`
+- Giữ nguyên và lý do: `[ ]`
+- Để dành sau hackathon: `[ ]`
 
-## 6. Thay đổi đã thực hiện
+## Thay đổi sau validation
 
-| Thay đổi | Bằng chứng dẫn tới thay đổi | Trạng thái |
-|---|---|---|
-| `[mô tả thay đổi]` | `U__ — “[quote hoặc mô tả quan sát]”` | `[đã sửa/chưa sửa]` |
+`[Mô tả thay đổi]` — bằng chứng: `U__ — “[quote/quan sát]”` — trạng thái: `[đã sửa/chưa sửa]`.
 
-> Sau khi điền kết quả, cập nhật cùng thay đổi này vào §9 `Changelog` trong `spec.md`. Nếu không thay đổi thiết kế, phải ghi rõ lý do dựa trên bằng chứng.
+> Nhớ cập nhật thay đổi này vào §9 `Changelog` trong `spec.md`. Không tự điền dữ liệu giả.
