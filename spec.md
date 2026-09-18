@@ -118,7 +118,7 @@ Kịch bản nhóm lo ngại nhất khi demo là AI trả về một roadmap có
 | 17/9 | Để người học tự nhập topic và thời lượng trước diagnostic, không gán sẵn topic khi mở ứng dụng. | Phù hợp với lát cắt một người học tự xác nhận mục tiêu và thời gian trước khi nhận lộ trình. |
 | 18/9 | Bổ sung source ID, no-evidence, retry/fallback và quality bar cho 20 case. | Trace CP3 ghi nhận provider có lỗi quota/timeout; cần phân biệt AI live với deterministic fallback và không tạo nguồn giả. |
 | 18/9 | Bổ sung learning package, transfer check, mastery gate và remediation sau khi chưa đạt 80%. | Biến kết quả roadmap thành hành động học, kiểm tra và ôn lại trong phạm vi prototype. |
-
+| 18/9 | sửa luồng logic tạo lộ trình học, loại bỏ nút reset thời gian | Lội code logic khiến người dùng trải nghiệm không đúng |
 ## Tự khai phần chưa hoàn thiện tại CP4
 - Evidence đã có `n = 23` phản hồi và log câu hỏi/câu trả lời trong `evidence/survey-log.md`. Đây là khảo sát thuận tiện trong phạm vi nhóm tiếp cận, không khẳng định đại diện cho toàn bộ người học AI Engineer.
 - File khảo sát không ghi thông tin để kiểm tra thành viên nhóm; điều kiện “23 người ngoài nhóm” cần được đội trưởng xác nhận khi nộp.
