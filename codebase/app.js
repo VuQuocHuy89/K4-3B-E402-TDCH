@@ -8,6 +8,21 @@
   const topicSuggestions = ["Machine Learning", "Python cho AI Engineer", "LLM và RAG", "AI Agents"];
   const isValidMinutes = (value) => Number.isInteger(Number(value)) && Number(value) >= 10 && Number(value) <= 240;
   const isValidTopic = (value) => String(value || "").trim().length >= 3 && String(value || "").trim().length <= 120;
+  const API_BASE = String(window.PATHWISE_API_BASE || "").trim().replace(/\/+$/, "");
+  const CLOUD_SESSION_KEY = "pathwise-cloud-session-key-v1";
+  const cloudSessionKey = (() => {
+    try {
+      const existing = localStorage.getItem(CLOUD_SESSION_KEY);
+      if (existing) return existing;
+      const generated = window.crypto?.randomUUID?.() || `demo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(CLOUD_SESSION_KEY, generated);
+      return generated;
+    } catch {
+      return "demo-session";
+    }
+  })();
+  let cloudHydrated = !API_BASE;
+  let cloudSaveTimer = null;
 
   const state = {
     view: window.location.hash.replace("#", "") || "setup",
@@ -64,6 +79,12 @@
     try {
       const snapshot = Object.fromEntries(persistableState.map((key) => [key, state[key]]));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      if (API_BASE && cloudHydrated) {
+        window.clearTimeout(cloudSaveTimer);
+        cloudSaveTimer = window.setTimeout(() => {
+          fetch(`${API_BASE}/api/session`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_key: cloudSessionKey, state: snapshot }) }).catch(() => {});
+        }, 600);
+      }
     } catch {}
   };
   const restoreState = () => {
@@ -135,7 +156,7 @@
   };
 
   const apiRequest = async (endpoint, payload) => {
-    const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const response = await fetch(`${API_BASE}${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!response.ok) throw new Error(`api_${response.status}`);
     return response.json();
   };
@@ -145,7 +166,7 @@
     const label = badge?.querySelector(".environment-label");
     if (!badge || !label) return;
     try {
-      const response = await fetch("/api/health");
+      const response = await fetch(`${API_BASE}/api/health`);
       if (!response.ok) throw new Error("health_unavailable");
       const health = await response.json();
       label.textContent = health.providers?.order?.length ? `AI live · ${health.providers.order[0]}` : "Local fallback";
@@ -154,6 +175,18 @@
       label.textContent = "Static demo";
       badge.dataset.live = "false";
     }
+  };
+
+  const hydrateCloudState = async () => {
+    if (!API_BASE) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/session?session_key=${encodeURIComponent(cloudSessionKey)}`);
+      if (!response.ok) throw new Error("session_unavailable");
+      const payload = await response.json();
+      if (payload.state && typeof payload.state === "object") Object.assign(state, payload.state);
+    } catch {}
+    cloudHydrated = true;
+    render();
   };
 
   const confidenceTier = (value) => value >= 0.8 ? "high" : value >= 0.5 ? "medium" : "low";
@@ -749,4 +782,5 @@
   restoreState();
   render();
   refreshEnvironmentStatus();
+  hydrateCloudState();
 })();
