@@ -83,6 +83,7 @@
 
   let focusInterval = null;
   let focusRemainingSeconds = 0;
+  let lastRenderedView = "";
 
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
@@ -724,6 +725,9 @@
   };
 
   const renderDiagnostic = () => {
+    if (state.diagnosticSkipped) {
+      return `${pageHeader("DIAGNOSTIC · ĐÃ BỎ QUA", "Bạn đang bắt đầu từ nền tảng", "Vì bạn chọn chưa biết gì, Pathwise đi thẳng vào roadmap prerequisite và sẽ kiểm tra mastery sau từng section.", `<button class="outline-button compact-button" type="button" data-view="roadmap">Mở roadmap ${icon("arrow")}</button>`)}<div class="locked-state panel-card"><span class="locked-state-icon">${icon("route")}</span><h2>Roadmap nền tảng đã sẵn sàng</h2><p>Diagnostic đầu vào được bỏ qua để bạn bắt đầu ngay từ section đầu tiên. Bạn vẫn có mastery test và remediation ở mỗi chặng.</p><button class="primary-button" type="button" data-view="roadmap">Xem lộ trình ${icon("arrow")}</button></div>`;
+    }
     const questions = activeDiagnosticQuestions();
     const question = questions[state.diagnosticIndex] || questions[0];
     const selected = state.diagnosticAnswers[question.id];
@@ -795,10 +799,11 @@
   };
 
   const renderRoadmap = () => {
-    const prioritySection = nextRecommendedSection();
+    const completedCount = pack.sections.filter((section) => state.completedSections[section.id]).length;
+    const allSectionsComplete = completedCount === pack.sections.length;
+    const prioritySection = allSectionsComplete ? pack.sections[pack.sections.length - 1] : nextRecommendedSection();
     const gapCount = state.diagnosticSkipped ? 0 : (state.aiAnalysis?.competency_gaps?.length || 2);
     const planSource = state.diagnosticSkipped ? `Bạn bắt đầu từ số 0 nên roadmap đi theo prerequisite, không ép bạn làm diagnostic trước.` : state.diagnosticSubmitted ? `Kết quả diagnostic đã được dùng để ưu tiên ${escapeHtml(prioritySection.title)}.` : "Làm diagnostic để tạo lộ trình sát với kiến thức hiện tại.";
-    const completedCount = pack.sections.filter((section) => state.completedSections[section.id]).length;
     const progress = Math.round((completedCount / pack.sections.length) * 100);
     const avatarStop = journeyStops[Math.min(completedCount, journeyStops.length - 1)];
     const allComplete = completedCount === pack.sections.length;
@@ -1021,9 +1026,16 @@
   };
 
   const render = () => {
+    const viewChanged = Boolean(lastRenderedView) && lastRenderedView !== state.view;
     persistState();
     const view = ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : ["assessment-loading", "mastery-loading"].includes(state.view) ? renderAssessmentLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
     viewContainer.innerHTML = view();
+    if (viewChanged) {
+      viewContainer.classList.remove("view-enter");
+      void viewContainer.offsetWidth;
+      viewContainer.classList.add("view-enter");
+    }
+    lastRenderedView = state.view;
     updateAccountUi();
     document.body.classList.toggle("is-onboarding", state.view === "setup");
     const topicSwitcher = document.querySelector(".topic-switcher");
@@ -1222,7 +1234,17 @@
     }
     if (action === "redo-diagnostic") { state.diagnosticIndex = 0; state.diagnosticAnswers = {}; state.diagnosticConfidence = {}; state.diagnosticSubmitted = false; state.diagnosticSkipped = false; state.aiAnalysis = null; state.agentMeta = null; state.assessmentQuestions.diagnostic = []; state.assessmentMeta.diagnostic = null; loadAssessment("diagnostic"); }
     if (action === "go-study") { state.selectedSectionId = nextRecommendedSection().id; setView("study"); }
-    if (action === "go-section") { state.selectedSectionId = target.dataset.sectionId; state.studyChecks = []; state.studyCompleted = false; state.focusStarted = false; setView("study"); }
+    if (action === "go-section") {
+      const selectedSection = getSection(target.dataset.sectionId);
+      const selectedIndex = pack.sections.findIndex((section) => section.id === selectedSection.id);
+      const alreadyComplete = Boolean(state.completedSections[selectedSection.id]);
+      if (selectedIndex > 0 && !state.completedSections[pack.sections[selectedIndex - 1].id] && !alreadyComplete) { showToast("Hãy pass section trước để mở chặng này."); return; }
+      state.selectedSectionId = selectedSection.id;
+      state.studyChecks = alreadyComplete ? selectedSection.checklist.map((_, index) => index) : [];
+      state.studyCompleted = alreadyComplete;
+      state.focusStarted = false;
+      setView("study");
+    }
     if (action === "discover-sources") discoverSources();
     if (action === "generate-package") generateLearningPackage();
     if (action === "toggle-check") { const item = Number(target.dataset.index); state.studyChecks = state.studyChecks.includes(item) ? state.studyChecks.filter((index) => index !== item) : [...state.studyChecks, item]; render(); }
