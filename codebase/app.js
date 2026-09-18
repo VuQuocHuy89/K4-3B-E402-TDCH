@@ -8,6 +8,21 @@
   const topicSuggestions = ["Machine Learning", "Python cho AI Engineer", "LLM và RAG", "AI Agents"];
   const isValidMinutes = (value) => Number.isInteger(Number(value)) && Number(value) >= 10 && Number(value) <= 240;
   const isValidTopic = (value) => String(value || "").trim().length >= 3 && String(value || "").trim().length <= 120;
+  const API_BASE = String(window.PATHWISE_API_BASE || "").trim().replace(/\/+$/, "");
+  const CLOUD_SESSION_KEY = "pathwise-cloud-session-key-v1";
+  const cloudSessionKey = (() => {
+    try {
+      const existing = localStorage.getItem(CLOUD_SESSION_KEY);
+      if (existing) return existing;
+      const generated = window.crypto?.randomUUID?.() || `demo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      localStorage.setItem(CLOUD_SESSION_KEY, generated);
+      return generated;
+    } catch {
+      return "demo-session";
+    }
+  })();
+  let cloudHydrated = !API_BASE;
+  let cloudSaveTimer = null;
 
   const state = {
     view: window.location.hash.replace("#", "") || "setup",
@@ -67,6 +82,12 @@
     try {
       const snapshot = Object.fromEntries(persistableState.map((key) => [key, state[key]]));
       localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
+      if (API_BASE && cloudHydrated) {
+        window.clearTimeout(cloudSaveTimer);
+        cloudSaveTimer = window.setTimeout(() => {
+          fetch(`${API_BASE}/api/session`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_key: cloudSessionKey, state: snapshot }) }).catch(() => {});
+        }, 600);
+      }
     } catch {}
   };
   const restoreState = () => {
@@ -136,7 +157,7 @@
   };
 
   const apiRequest = async (endpoint, payload) => {
-    const response = await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const response = await fetch(`${API_BASE}${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     if (!response.ok) throw new Error(`api_${response.status}`);
     return response.json();
   };
@@ -146,7 +167,7 @@
     const label = badge?.querySelector(".environment-label");
     if (!badge || !label) return;
     try {
-      const response = await fetch("/api/health");
+      const response = await fetch(`${API_BASE}/api/health`);
       if (!response.ok) throw new Error("health_unavailable");
       const health = await response.json();
       label.textContent = health.providers?.order?.length ? `AI live · ${health.providers.order[0]}` : "Local fallback";
@@ -155,6 +176,18 @@
       label.textContent = "Static demo";
       badge.dataset.live = "false";
     }
+  };
+
+  const hydrateCloudState = async () => {
+    if (!API_BASE) return;
+    try {
+      const response = await fetch(`${API_BASE}/api/session?session_key=${encodeURIComponent(cloudSessionKey)}`);
+      if (!response.ok) throw new Error("session_unavailable");
+      const payload = await response.json();
+      if (payload.state && typeof payload.state === "object") Object.assign(state, payload.state);
+    } catch {}
+    cloudHydrated = true;
+    render();
   };
 
   const confidenceTier = (value) => value >= 0.8 ? "high" : value >= 0.5 ? "medium" : "low";
@@ -206,6 +239,37 @@
     if (sectionState(section, index) === "locked") { stopFocusTimer(); return; }
     if (!focusInterval) startFocusTimer();
   };
+
+  const sidebarMedia = window.matchMedia("(max-width: 760px)");
+  let sidebarCollapsed = false;
+  try { sidebarCollapsed = localStorage.getItem("pathwise-sidebar-collapsed") === "true"; } catch {}
+  const syncSidebar = () => {
+    const sidebar = document.querySelector(".sidebar");
+    const expanded = sidebarMedia.matches ? sidebar.classList.contains("is-open") : !sidebarCollapsed;
+    document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+    sidebar.inert = sidebarMedia.matches && !expanded;
+    document.querySelectorAll('[data-action="toggle-sidebar"]').forEach((button) => {
+      const label = expanded ? (sidebarMedia.matches ? "Đóng thanh bên" : "Thu gọn thanh bên") : "Mở rộng thanh bên";
+      button.setAttribute("aria-expanded", String(expanded));
+      button.setAttribute("aria-controls", "workspace-sidebar");
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    });
+  };
+  const closeSidebar = () => {
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebarMedia.matches && sidebar.contains(document.activeElement)) document.querySelector(".mobile-menu")?.focus();
+    sidebar.classList.remove("is-open");
+    syncSidebar();
+  };
+  sidebarMedia.addEventListener("change", closeSidebar);
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSidebar(); });
+  document.querySelectorAll(".nav-item, .sidebar-link").forEach((item) => {
+    const label = item.querySelector("span:nth-child(2)")?.textContent || item.textContent.trim();
+    item.setAttribute("aria-label", label);
+    item.title = label;
+  });
+  syncSidebar();
 
   const setView = (view, options = {}) => {
     state.view = view;
@@ -626,16 +690,33 @@
   document.addEventListener("click", (event) => {
     const nav = event.target.closest("[data-view]");
     if (nav) {
+      if (!state.profileConfigured && nav.dataset.view !== "setup") {
+        showToast("Hãy thiết lập mục tiêu học tập trước khi mở workspace.");
+        closeSidebar();
+        return;
+      }
       setView(nav.dataset.view);
-      document.querySelector(".sidebar")?.classList.remove("is-open");
+      closeSidebar();
       return;
     }
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
     if (action === "reset") reset();
-    if (action === "toggle-sidebar") document.querySelector(".sidebar")?.classList.toggle("is-open");
-    if (action === "topic-menu") setView("setup");
+    if (action === "toggle-sidebar") {
+      if (sidebarMedia.matches) {
+        if (document.querySelector(".sidebar").classList.contains("is-open")) closeSidebar();
+        else document.querySelector(".sidebar").classList.add("is-open");
+      }
+      else {
+        sidebarCollapsed = !sidebarCollapsed;
+        try { localStorage.setItem("pathwise-sidebar-collapsed", String(sidebarCollapsed)); } catch {}
+      }
+      syncSidebar();
+      if (sidebarMedia.matches && document.querySelector(".sidebar").classList.contains("is-open")) document.querySelector(".sidebar-toggle").focus();
+    }
+    if (action === "close-sidebar") closeSidebar();
+    if (action === "topic-menu") { setView("setup"); closeSidebar(); }
     if (action === "notification") showToast("Bạn có thể chỉnh thời gian học trong learning roadmap.");
     if (action === "profile") showToast("Hồ sơ học tập của Vũ Quốc Huy · K4 · 3B.");
     if (action === "fill-topic") { state.pathTopic = target.dataset.topic; persistState(); render(); document.querySelector("#path-topic")?.focus(); }
@@ -725,4 +806,5 @@
   restoreState();
   render();
   refreshEnvironmentStatus();
+  hydrateCloudState();
 })();

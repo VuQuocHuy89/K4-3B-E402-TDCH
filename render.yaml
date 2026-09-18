@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: pathwise-api
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: AI_PROVIDER
+        value: auto
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pathwise-db
+          property: connectionString
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: OPENROUTER_MODEL
+        value: openai/gpt-4o
+      - key: AI_TIMEOUT_MS
+        value: "12000"
+
+databases:
+  - name: pathwise-db
+    databaseName: pathwise
+    user: pathwise
+    plan: free

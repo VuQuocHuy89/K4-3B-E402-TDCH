@@ -27,6 +27,17 @@ const pdfPath = process.env.DOCUMENT_PDF_PATH || path.join(rootDir, "Grokking Ma
 const traceFile = process.env.AI_TRACE_FILE || "/tmp/pathwise-agent-trace.jsonl";
 
 const traceLimit = 12000;
+let dbPool = null;
+let dbInitError = null;
+if (process.env.DATABASE_URL) {
+  try {
+    const { Pool } = require("pg");
+    dbPool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false }, max: 5 });
+  } catch (error) {
+    dbInitError = error.message;
+  }
+}
+
 const redactTrace = (value) => {
   if (Array.isArray(value)) return value.map(redactTrace);
   if (!value || typeof value !== "object") return typeof value === "string" ? value.slice(0, traceLimit) : value;
@@ -42,6 +53,36 @@ const writeTrace = async (event) => {
     await fs.mkdir(path.dirname(traceFile), { recursive: true });
     await fs.appendFile(traceFile, `${JSON.stringify(redactTrace(event))}\n`);
   } catch {}
+};
+
+const initDatabase = async () => {
+  if (!dbPool) return;
+  try {
+    await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS learning_sessions (
+        session_key TEXT PRIMARY KEY,
+        state JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+  } catch (error) {
+    dbInitError = error.message;
+  }
+};
+
+const sessionKeyIsValid = (value) => typeof value === "string" && value.trim().length >= 3 && value.trim().length <= 160;
+const loadSession = async (sessionKey) => {
+  if (!dbPool || !sessionKeyIsValid(sessionKey)) return null;
+  const result = await dbPool.query("SELECT state, updated_at FROM learning_sessions WHERE session_key = $1", [sessionKey.trim()]);
+  return result.rows[0] || null;
+};
+const saveSession = async (sessionKey, state) => {
+  if (!dbPool || !sessionKeyIsValid(sessionKey) || !state || typeof state !== "object" || Array.isArray(state)) return false;
+  await dbPool.query(
+    "INSERT INTO learning_sessions (session_key, state, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (session_key) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()",
+    [sessionKey.trim(), JSON.stringify(state)],
+  );
+  return true;
 };
 
 const documentState = {
@@ -452,17 +493,37 @@ const runAgent = async (route, input) => {
   return { data, meta };
 };
 
-const api = async (req, res, pathname) => {
+const api = async (req, res, url) => {
+  const { pathname } = url;
   if (req.method === "OPTIONS") return json(res, 204, {});
   if (req.method === "GET" && pathname === "/api/health") return json(res, 200, {
     ok: true,
     topic: topicContext.title,
     document: { loaded: documentState.loaded, file_name: documentState.fileName, pages: documentState.pages.length, error: documentState.error },
     providers: { order: providerOrder(), gemini: configured("gemini"), openrouter: configured("openrouter") },
+    database: { configured: Boolean(process.env.DATABASE_URL), ready: Boolean(dbPool && !dbInitError), error: dbInitError },
   });
+  if (req.method === "GET" && pathname === "/api/session") {
+    if (!dbPool) return json(res, 200, { enabled: false, state: null });
+    try {
+      const session = await loadSession(url.searchParams.get("session_key"));
+      return json(res, 200, { enabled: true, state: session?.state || null, updated_at: session?.updated_at || null });
+    } catch (error) {
+      return json(res, 503, { enabled: true, error: "database_unavailable", detail: error.message });
+    }
+  }
   if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
   let input;
   try { input = await bodyOf(req); } catch (error) { return json(res, 400, { error: error.message }); }
+  if (pathname === "/api/session") {
+    if (!dbPool) return json(res, 503, { enabled: false, error: "database_not_configured" });
+    try {
+      const saved = await saveSession(input.session_key, input.state);
+      return saved ? json(res, 200, { enabled: true, saved: true }) : json(res, 400, { enabled: true, error: "invalid_session" });
+    } catch (error) {
+      return json(res, 503, { enabled: true, error: "database_unavailable", detail: error.message });
+    }
+  }
   const route = pathname === "/api/learning/analyze" ? "analyze" : pathname === "/api/tutor" ? "tutor" : pathname === "/api/remediation" ? "remediation" : null;
   if (pathname === "/api/sources/discover") return json(res, 200, await runSourceDiscovery(input));
   if (pathname === "/api/learning/package") return json(res, 200, await runLearningPackage(input));
@@ -482,9 +543,9 @@ const serve = async (req, res, pathname) => {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-  if (url.pathname.startsWith("/api/")) return api(req, res, url.pathname);
+  if (url.pathname.startsWith("/api/")) return api(req, res, url);
   if (req.method !== "GET" && req.method !== "HEAD") return text(res, 405, "Method not allowed");
   return serve(req, res, url.pathname);
 });
 
-loadDocument().finally(() => server.listen(port, () => console.log(`Pathwise server running at http://localhost:${port} · document=${documentState.loaded ? documentState.fileName : documentState.error} · providers=${providerOrder().join(",") || "fallback"}`)));
+Promise.all([loadDocument(), initDatabase()]).finally(() => server.listen(port, "0.0.0.0", () => console.log(`Pathwise server running at http://localhost:${port} · document=${documentState.loaded ? documentState.fileName : documentState.error} · providers=${providerOrder().join(",") || "fallback"} · database=${dbPool && !dbInitError ? "ready" : "disabled"}`)));

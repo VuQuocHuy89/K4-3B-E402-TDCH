@@ -11,36 +11,25 @@
   <body>
     <a class="skip-link" href="#main-content">Bỏ qua đến nội dung chính</a>
     <div class="app-shell">
-      <header class="topbar">
+      <div class="app-body">
+        <aside id="workspace-sidebar" class="sidebar" aria-label="Điều hướng workspace">
+          <div class="sidebar-heading">
         <a class="brand" href="#overview" aria-label="Pathwise, tổng quan">
           <span class="brand-mark" aria-hidden="true">
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 5.5h9.5A4.5 4.5 0 0 1 19 10v8.5H9.5A4.5 4.5 0 0 1 5 14V5.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M8 9.5h6.5M8 13h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           </span>
           <span class="brand-name">Pathwise</span>
-          <span class="brand-subtitle">adaptive learning engine</span>
         </a>
-        <div class="topbar-center">
-          <button class="topic-switcher" type="button" data-action="topic-menu" aria-haspopup="true" aria-expanded="false">
+            <button class="icon-button sidebar-toggle" type="button" data-action="toggle-sidebar" aria-controls="workspace-sidebar" aria-expanded="true" aria-label="Thu gọn thanh bên" title="Thu gọn thanh bên">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="3" stroke="currentColor" stroke-width="1.7"/><path d="M9 4v16" stroke="currentColor" stroke-width="1.7"/></svg>
+            </button>
+          </div>
+          <div class="sidebar-topic">
+          <button class="topic-switcher" type="button" data-action="topic-menu" aria-label="Thiết lập learning path" title="Thiết lập learning path">
             <span class="topic-switcher-icon" aria-hidden="true">01</span>
             <span><small>CHƯA THIẾT LẬP</small><strong>Thiết lập learning path</strong></span>
             <span class="chevron" aria-hidden="true">⌄</span>
           </button>
-        </div>
-        <div class="topbar-actions">
-          <span class="environment-badge" id="environment-badge" data-live="false"><span class="status-dot" aria-hidden="true"></span><span class="environment-label">Đang kết nối AI...</span></span>
-          <button class="icon-button" type="button" data-action="notification" aria-label="Thông báo" title="Thông báo">
-            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M18 9.5a6 6 0 0 0-12 0c0 7-3 7-3 8.5h18C21 16.5 18 16.5 18 9.5ZM10 21h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span class="notification-dot" aria-hidden="true"></span>
-          </button>
-          <button class="avatar" type="button" data-action="profile" aria-label="Hồ sơ của Huy">H</button>
-        </div>
-      </header>
-
-      <div class="app-body">
-        <aside class="sidebar" aria-label="Điều hướng workspace">
-          <div class="sidebar-profile">
-            <div class="avatar avatar-large">H</div>
-            <div><strong>Vũ Quốc Huy</strong><span>K4 · 3B · Learner</span></div>
           </div>
           <nav class="primary-nav" aria-label="Các khu vực học tập">
             <p class="nav-label">WORKSPACE</p>
@@ -52,10 +41,20 @@
             <button class="nav-item" type="button" data-view="assessment"><span class="nav-icon" data-icon="check"></span><span>Assessments</span></button>
           </nav>
           <div class="sidebar-bottom">
-            <div class="streak-card"><div class="streak-top"><span class="streak-icon" data-icon="flame"></span><strong>Phiên học đầu tiên</strong></div><span>Hoàn thành một section để bắt đầu ghi nhận tiến độ.</span><div class="streak-days"><i class="is-today">Hôm nay</i><i>Ngày 2</i><i>Ngày 3</i></div></div>
-            <button class="sidebar-link" type="button" data-action="reset"><span data-icon="refresh"></span>Đặt lại demo</button>
+            <div class="streak-card" hidden><div class="streak-top"><span class="streak-icon" data-icon="flame"></span><strong>Phiên học đầu tiên</strong></div><span>Hoàn thành một section để bắt đầu ghi nhận tiến độ.</span><div class="streak-days"><i class="is-today">Hôm nay</i><i>Ngày 2</i><i>Ngày 3</i></div></div>
+            <button class="sidebar-link" type="button" data-action="reset"><span data-icon="refresh"></span><span class="sidebar-text">Đặt lại demo</span></button>
+          <span class="environment-badge" id="environment-badge" data-live="false"><span class="status-dot" aria-hidden="true"></span><span class="environment-label">Đang kết nối AI...</span></span>
+          <button class="nav-item sidebar-notification" type="button" data-action="notification" aria-label="Thông báo" title="Thông báo">
+            <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M18 9.5a6 6 0 0 0-12 0c0 7-3 7-3 8.5h18C21 16.5 18 16.5 18 9.5ZM10 21h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span class="sidebar-text">Thông báo</span>
+            <span class="notification-dot" aria-hidden="true"></span>
+          </button>
+            <button class="sidebar-account" type="button" data-action="profile" aria-label="Hồ sơ của Vũ Quốc Huy" title="Hồ sơ của Vũ Quốc Huy">
+              <span class="avatar">H</span><span class="account-details"><strong>Vũ Quốc Huy</strong><small>K4 · 3B · Learner</small></span><span class="account-more" aria-hidden="true">···</span>
+            </button>
           </div>
         </aside>
+        <button class="sidebar-backdrop" type="button" data-action="close-sidebar" aria-label="Đóng thanh bên" tabindex="-1"></button>
 
         <main id="main-content" class="main-content">
           <div class="mobile-context"><button class="mobile-menu" type="button" data-action="toggle-sidebar" aria-label="Mở menu"><span data-icon="menu"></span></button><span>Thiết lập learning path</span></div>
@@ -66,6 +65,7 @@
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <div class="sr-only" id="live-region" aria-live="polite"></div>
     <script src="content-pack.js"></script>
+    <script src="runtime-config.js"></script>
     <script src="app.js"></script>
   </body>
 </html>
