@@ -96,7 +96,9 @@
       if (!saved || typeof saved !== "object") return;
       persistableState.forEach((key) => { if (saved[key] !== undefined) state[key] = saved[key]; });
       if (!pack.sections.some((section) => section.id === state.selectedSectionId)) state.selectedSectionId = pack.sections[0].id;
-      if (!["new", "beginner", "intermediate"].includes(state.pathLevel)) state.pathLevel = "new";
+      // Migrate sessions that used the removed option to the diagnostic flow.
+      if (state.pathLevel === "intermediate") state.pathLevel = "beginner";
+      if (!["new", "beginner"].includes(state.pathLevel)) state.pathLevel = "new";
       if (!Array.isArray(state.tutorMessages)) state.tutorMessages = [];
       if (["diagnostic-loading", "remediation-loading"].includes(state.view)) state.view = "overview";
       if (!state.profileConfigured) state.view = "setup";
@@ -304,15 +306,15 @@
           <div class="topic-input-footer"><small>Chủ đề này sẽ trở thành đầu vào của diagnostic và roadmap.</small><span>${state.pathTopic.trim().length}/120</span></div>
           <div class="topic-suggestions" aria-label="Gợi ý chủ đề"><span>Gợi ý:</span>${topicSuggestions.map((topic) => `<button type="button" class="topic-suggestion" data-action="fill-topic" data-topic="${escapeHtml(topic)}">${escapeHtml(topic)}</button>`).join("")}</div>
         </div>
-        <div class="setup-step"><span>02</span><div><span class="panel-kicker">ĐIỂM BẮT ĐẦU</span><h2>Bạn đang ở đâu với chủ đề này?</h2><p>Chọn “chưa biết gì” nếu muốn đi thẳng tới roadmap nền tảng, không phải làm bài test không cần thiết.</p></div></div>
+        <div class="setup-step"><span>02</span><div><span class="panel-kicker">ĐIỂM BẮT ĐẦU</span><h2>Bạn đang ở đâu với chủ đề này?</h2><p>Chọn “biết sơ qua” để làm diagnostic ngay, hoặc “chưa biết gì” để bắt đầu từ roadmap nền tảng.</p></div></div>
         <div class="segmented-choice" role="group" aria-label="Trình độ hiện tại">
-          ${[["new", "Chưa biết gì", "Đi thẳng tới roadmap nền tảng"], ["beginner", "Biết sơ qua", "Làm diagnostic bao quát các phần"], ["intermediate", "Đã học một phần", "Tìm gap để học đúng thứ tự"]].map(([value, label, help]) => `<button class="level-choice ${state.pathLevel === value ? "is-selected" : ""}" type="button" data-action="select-path-level" data-level="${value}" aria-pressed="${state.pathLevel === value}"><strong>${label}</strong><small>${help}</small></button>`).join("")}
+          ${[["new", "Chưa biết gì", "Đi thẳng tới roadmap nền tảng"], ["beginner", "Biết sơ qua", "Vào diagnostic ngay"]].map(([value, label, help]) => `<button class="level-choice ${state.pathLevel === value ? "is-selected" : ""}" type="button" data-action="select-path-level" data-level="${value}" aria-pressed="${state.pathLevel === value}"><strong>${label}</strong><small>${help}</small></button>`).join("")}
         </div>
         <div class="setup-step"><span>03</span><div><span class="panel-kicker">THỜI GIAN</span><h2>Mỗi ngày bạn có bao nhiêu thời gian?</h2><p>Tự nhập số phút bạn thực sự có; Pathwise sẽ dùng con số này để chia nhỏ session.</p></div></div>
         <div class="minutes-field"><label class="field-label" for="path-minutes">Thời gian học mỗi ngày</label><div class="minutes-input-wrap"><input id="path-minutes" name="path_minutes" type="number" min="10" max="240" step="1" inputmode="numeric" value="${state.pathMinutes === "" ? "" : escapeHtml(state.pathMinutes)}" placeholder="Ví dụ: 35" aria-describedby="path-minutes-help path-minutes-error" /><span>phút / ngày</span></div><small id="path-minutes-help">Nhập từ 10 đến 240 phút. Bạn có thể điều chỉnh lại sau.</small><small id="path-minutes-error" class="field-error" ${state.pathMinutes === "" || isValidMinutes(state.pathMinutes) ? "hidden" : ""}>Thời gian phải nằm trong khoảng 10–240 phút.</small></div>
-        <div class="setup-footer"><span>${!isValidTopic(state.pathTopic) ? "Nhập một chủ đề để tiếp tục." : !isValidMinutes(state.pathMinutes) ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để tạo learning path."}</span><button class="primary-button" type="button" data-action="create-path" ${isValidTopic(state.pathTopic) && isValidMinutes(state.pathMinutes) ? "" : "disabled"}>${state.pathLevel === "new" ? "Tạo roadmap nền tảng" : "Tạo learning path"} ${icon("arrow")}</button></div>
+        <div class="setup-footer"><span>${!isValidTopic(state.pathTopic) ? "Nhập một chủ đề để tiếp tục." : !isValidMinutes(state.pathMinutes) ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để vào diagnostic."}</span><button class="primary-button" type="button" data-action="create-path" ${isValidTopic(state.pathTopic) && isValidMinutes(state.pathMinutes) ? "" : "disabled"}>${state.pathLevel === "new" ? "Tạo roadmap nền tảng" : "Bắt đầu diagnostic"} ${icon("arrow")}</button></div>
       </section>
-      <aside class="setup-aside"><div class="setup-preview panel-card"><span class="panel-kicker">SAU KHI THIẾT LẬP</span><h3>Pathwise sẽ làm gì?</h3><div class="setup-preview-row"><span>01</span><p>${state.pathLevel === "new" ? "Dựng roadmap nền tảng từ mục tiêu của bạn" : "Đánh giá mức độ bao phủ bằng diagnostic"}</p></div><div class="setup-preview-row"><span>02</span><p>Ưu tiên competency và section cần học</p></div><div class="setup-preview-row"><span>03</span><p>Đưa nội dung, ví dụ và bài thực hành theo section</p></div><div class="setup-preview-row"><span>04</span><p>Kiểm tra mastery bao quát trước khi mở bước tiếp</p></div></div><div class="setup-note panel-card"><span class="application-icon">${icon("shield")}</span><div><strong>Bạn luôn kiểm soát lộ trình</strong><p>Chủ đề do bạn nhập. Nội dung demo hiện có được map đầy đủ cho Machine Learning; chủ đề khác được giữ làm mục tiêu để mở rộng nội dung.</p></div></div></aside>
+      <aside class="setup-aside"><div class="setup-preview panel-card"><span class="panel-kicker">SAU KHI THIẾT LẬP</span><h3>Pathwise sẽ làm gì?</h3><div class="setup-preview-row"><span>01</span><p>${state.pathLevel === "new" ? "Dựng roadmap nền tảng từ mục tiêu của bạn" : "Mở diagnostic ngay để đánh giá mức độ bao phủ"}</p></div><div class="setup-preview-row"><span>02</span><p>Ưu tiên competency và section cần học</p></div><div class="setup-preview-row"><span>03</span><p>Đưa nội dung, ví dụ và bài thực hành theo section</p></div><div class="setup-preview-row"><span>04</span><p>Kiểm tra mastery bao quát trước khi mở bước tiếp</p></div></div><div class="setup-note panel-card"><span class="application-icon">${icon("shield")}</span><div><strong>Bạn luôn kiểm soát lộ trình</strong><p>Chủ đề do bạn nhập. Nội dung demo hiện có được map đầy đủ cho Machine Learning; chủ đề khác được giữ làm mục tiêu để mở rộng nội dung.</p></div></div></aside>
     </div>`;
 
   const renderOverview = () => {
@@ -731,14 +733,19 @@
       state.diagnosticSubmitted = false;
       state.aiAnalysis = null;
       state.recommendedPath = [];
-      state.view = state.diagnosticSkipped ? "diagnostic-loading" : "overview";
+      // New learners keep the baseline roadmap flow. Learners who know the
+      // topic already enter the diagnostic test immediately.
+      state.diagnosticIndex = 0;
+      state.diagnosticAnswers = {};
+      state.diagnosticConfidence = {};
+      state.view = state.diagnosticSkipped ? "diagnostic-loading" : "diagnostic";
       window.history.replaceState(null, "", `#${state.view}`);
       render();
       if (state.diagnosticSkipped) {
         showToast("Đang tạo roadmap nền tảng từ mục tiêu của bạn.");
         window.setTimeout(() => submitDiagnostic(true), 720);
       } else {
-        showToast("Đã ghi nhận mục tiêu. Bước tiếp theo là diagnostic bao quát.");
+        showToast("Đã ghi nhận mục tiêu. Bắt đầu diagnostic.");
       }
     }
     if (action === "start-diagnostic") { state.diagnosticSkipped = false; state.diagnosticIndex = 0; setView("diagnostic"); }
@@ -786,7 +793,7 @@
       const footerMessage = document.querySelector(".setup-footer > span");
       const counter = document.querySelector(".topic-input-footer > span");
       if (createButton) createButton.disabled = !validTopic || !validMinutes;
-      if (footerMessage) footerMessage.textContent = !validTopic ? "Nhập một chủ đề để tiếp tục." : !validMinutes ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để tạo learning path.";
+      if (footerMessage) footerMessage.textContent = !validTopic ? "Nhập một chủ đề để tiếp tục." : !validMinutes ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để vào diagnostic.";
       if (counter) counter.textContent = `${state.pathTopic.trim().length}/120`;
     }
     if (event.target.id === "path-minutes") {
@@ -797,7 +804,7 @@
       const footerMessage = document.querySelector(".setup-footer > span");
       const errorMessage = document.querySelector("#path-minutes-error");
       if (createButton) createButton.disabled = !isValidTopic(state.pathTopic) || !valid;
-      if (footerMessage) footerMessage.textContent = !isValidTopic(state.pathTopic) ? "Nhập một chủ đề để tiếp tục." : !valid ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để tạo learning path.";
+      if (footerMessage) footerMessage.textContent = !isValidTopic(state.pathTopic) ? "Nhập một chủ đề để tiếp tục." : !valid ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để vào diagnostic.";
       if (errorMessage) errorMessage.hidden = state.pathMinutes === "" || valid;
     }
   });
