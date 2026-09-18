@@ -445,9 +445,9 @@ const fallbackAssessment = (input) => {
 };
 
 const parseModel = (value) => JSON.parse(String(value).trim().replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
-const fetchJson = async (url, options) => {
+const fetchJson = async (url, options, timeoutMs = Number(process.env.AI_TIMEOUT_MS || 12000)) => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Number(process.env.AI_TIMEOUT_MS || 12000));
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     const body = await response.text();
@@ -556,6 +556,24 @@ const learningPackageSchema = {
   properties: {
     status: { type: "string" },
     objective: { type: "string" },
+    slides: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          type: { type: "string" },
+          title: { type: "string" },
+          subtitle: { type: "string" },
+          body: { type: "string" },
+          bullets: { type: "array", items: { type: "string" } },
+          takeaway: { type: "string" },
+          checkpoint: { type: "string" },
+          source_urls: { type: "array", items: { type: "string" } },
+        },
+        required: ["id", "type", "title", "body", "bullets", "takeaway", "source_urls"],
+      },
+    },
     concepts: { type: "array", items: { type: "object", properties: { title: { type: "string" }, body: { type: "string" } }, required: ["title", "body"] } },
     example: { type: "string" },
     practice_steps: { type: "array", items: { type: "string" } },
@@ -563,7 +581,7 @@ const learningPackageSchema = {
     source_urls: { type: "array", items: { type: "string" } },
     estimated_minutes: { type: "integer" },
   },
-  required: ["status", "objective", "concepts", "example", "practice_steps", "transfer_question", "source_urls", "estimated_minutes"],
+  required: ["status", "objective", "slides", "concepts", "example", "practice_steps", "transfer_question", "source_urls", "estimated_minutes"],
 };
 
 const callSourceProvider = async (name, input) => {
@@ -579,7 +597,7 @@ const callSourceProvider = async (name, input) => {
         tools: [{ google_search: {} }],
         generationConfig: { temperature: 0.1, responseMimeType: "application/json", responseSchema: sourceDiscoverySchema },
       }),
-    });
+    }, Number(process.env.SOURCE_DISCOVERY_TIMEOUT_MS || 8000));
     return parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(""));
   }
   const response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
@@ -593,7 +611,7 @@ const callSourceProvider = async (name, input) => {
       response_format: { type: "json_object" },
       tools: [{ type: "openrouter:web_search", parameters: { engine: "auto", max_results: 5, max_total_results: 5, search_context_size: "low" } }],
     }),
-  });
+  }, Number(process.env.SOURCE_DISCOVERY_TIMEOUT_MS || 8000));
   const content = response.choices?.[0]?.message?.content;
   return parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content);
 };
@@ -621,21 +639,42 @@ const runSourceDiscovery = async (input) => {
   return { data: { status: "catalog", query: input.query || "", note: "Tạm dùng catalog nguồn chính thống đã kiểm duyệt; bạn có thể tìm lại khi AI provider sẵn sàng.", sources: fallbackSources }, meta };
 };
 
-const packagePrompt = (input, section, sourcesForPackage) => `You are a bounded Vietnamese instructional designer for an AI Engineer learning path. Create one concise learning package for the section below using only the provided verified sources. Do not invent facts, URLs, learner scores, or citations. The package must be practical for a ${input.level || "beginner-to-intermediate"} learner and fit about ${input.minutes || section.duration} minutes. Return JSON only matching this schema: ${JSON.stringify(learningPackageSchema)}. Section: ${JSON.stringify({ title: section.title, objective: section.objective || section.title, source_ids: section.sourceIds })}. Verified sources: ${JSON.stringify(sourcesForPackage)}. Make concepts actionable, include one ML/product example, 2-4 practice steps, one transfer question, and echo only source URLs actually used.`;
+const packagePrompt = (input, section, sourcesForPackage) => `You are a bounded Vietnamese instructional designer for an AI Engineer learning path. Create a substantial, beginner-friendly learning package for the section below using only the provided verified sources. Do not invent facts, URLs, learner scores, or citations. The package should fit about ${input.minutes || section.duration} minutes and be readable as an interactive slide deck, not as a short summary. Return JSON only matching this schema: ${JSON.stringify(learningPackageSchema)}.
+
+Section: ${JSON.stringify({ title: section.title, objective: section.objective || section.title, source_ids: section.sourceIds })}
+Verified sources: ${JSON.stringify(sourcesForPackage)}
+
+Create 7 to 9 slides in Vietnamese, in this order when relevant: orientation, core idea, mental model or process, worked example, common mistake, practical decision/checklist, self-check, recap. Every slide must have a clear title, a body of 2-4 useful sentences, 2-4 concrete bullets, one memorable takeaway, and at least one source_urls entry copied exactly from the verified sources. Use source_urls only for URLs provided above. Keep the writing explanatory and specific: define terms, connect them to an AI Engineer decision, and use one realistic product/data example. Avoid filler, generic motivational text, and unexplained jargon. Keep concepts, example, practice_steps, and transfer_question as a compact summary of the deck.`;
 
 const validateLearningPackage = (data, section, sourcesForPackage) => {
-  if (!data || typeof data !== "object" || !Array.isArray(data.concepts) || !Array.isArray(data.practice_steps) || !Array.isArray(data.source_urls)) throw new Error("provider_invalid_learning_package");
+  if (!data || typeof data !== "object" || !Array.isArray(data.slides) || !Array.isArray(data.concepts) || !Array.isArray(data.practice_steps) || !Array.isArray(data.source_urls)) throw new Error("provider_invalid_learning_package");
   const validUrls = new Set(sourcesForPackage.map((source) => source.url));
   const sourceUrls = data.source_urls.filter((url) => validUrls.has(url));
-  if (!data.objective || !data.example || !data.transfer_question || !sourceUrls.length) throw new Error("provider_unverified_learning_package");
+  const slides = data.slides.slice(0, 10).map((slide, index) => {
+    const slideSources = (Array.isArray(slide.source_urls) ? slide.source_urls : []).filter((url) => validUrls.has(url));
+    return {
+      id: String(slide.id || `slide-${index + 1}`).slice(0, 80),
+      type: String(slide.type || "concept").slice(0, 40),
+      title: String(slide.title || "").slice(0, 180),
+      subtitle: String(slide.subtitle || "").slice(0, 240),
+      body: String(slide.body || "").slice(0, 1400),
+      bullets: (Array.isArray(slide.bullets) ? slide.bullets : []).slice(0, 5).map((item) => String(item).slice(0, 360)).filter(Boolean),
+      takeaway: String(slide.takeaway || "").slice(0, 360),
+      checkpoint: String(slide.checkpoint || "").slice(0, 500),
+      source_urls: slideSources,
+    };
+  }).filter((slide) => slide.title && slide.body && slide.bullets.length && slide.takeaway && slide.source_urls.length);
+  if (!data.objective || !data.example || !data.transfer_question || !sourceUrls.length || slides.length < 6) throw new Error("provider_unverified_learning_package");
+  const allSourceUrls = [...new Set([...sourceUrls, ...slides.flatMap((slide) => slide.source_urls)])];
   return {
     status: "ok",
     objective: String(data.objective).slice(0, 600),
+    slides,
     concepts: data.concepts.slice(0, 4).map((concept) => ({ title: String(concept.title).slice(0, 140), body: String(concept.body).slice(0, 700) })),
     example: String(data.example).slice(0, 900),
     practice_steps: data.practice_steps.slice(0, 4).map((step) => String(step).slice(0, 300)),
     transfer_question: String(data.transfer_question).slice(0, 500),
-    source_urls: sourceUrls,
+    source_urls: allSourceUrls,
     estimated_minutes: Math.max(5, Math.min(90, Number(data.estimated_minutes) || section.duration)),
   };
 };
@@ -643,6 +682,16 @@ const validateLearningPackage = (data, section, sourcesForPackage) => {
 const fallbackLearningPackage = (section, sourcesForPackage) => ({
   status: "catalog",
   objective: `Sau section này, bạn có thể giải thích và áp dụng ${section.title} trong một bài toán AI Engineer.`,
+  slides: [
+    { id: "slide-orientation", type: "title", title: section.title, subtitle: "Một bài học có nguồn, có ví dụ và có điểm tự kiểm.", body: `Section này giúp bạn đi từ khái niệm ${section.title} đến một quyết định có thể giải thích trong quy trình AI Engineer. Hãy đọc từng slide, sau đó dùng checklist để kiểm tra xem bạn đã biến kiến thức thành hành động chưa.`, bullets: ["Biết section này giải quyết câu hỏi nào", "Nối khái niệm với dữ liệu và quyết định", "Kết thúc bằng một bài tập chuyển giao"], takeaway: "Hiểu một khái niệm có nghĩa là bạn biết dùng nó để đưa ra quyết định.", source_urls: sourcesForPackage.slice(0, 2).map((source) => source.url) },
+    { id: "slide-core", type: "concept", title: `Ý chính: ${section.title}`, subtitle: "Định nghĩa trước, chọn công cụ sau.", body: `Bắt đầu bằng việc nói rõ ${section.title} là gì, đầu vào là gì và đầu ra cần quan sát là gì. Khi mục tiêu chưa rõ, việc chọn model hoặc metric dễ biến thành thử công cụ theo cảm tính.`, bullets: ["Xác định đối tượng hoặc output cần tạo", "Tách dữ liệu quan sát khỏi mục tiêu dự đoán", "Nêu tiêu chí để biết kết quả có ích"], takeaway: "Problem framing quyết định phần lớn chất lượng của solution.", source_urls: sourcesForPackage.slice(0, 2).map((source) => source.url) },
+    { id: "slide-process", type: "process", title: "Khung suy nghĩ 3 bước", subtitle: "Từ câu hỏi sản phẩm đến kiểm chứng.", body: "Một cách làm bền vững là mô tả bài toán, chọn cách đo, rồi kiểm tra trên dữ liệu phù hợp. Ba bước này giúp bạn phát hiện sớm việc dữ liệu không đủ, nhãn không đáng tin hoặc metric không phản ánh chi phí thật.", bullets: ["Mô tả input, target và bối cảnh sử dụng", "Chọn metric gắn với loại lỗi quan trọng", "Giữ tập validation/test tách khỏi dữ liệu dùng để fit"], takeaway: "Đừng để model trả lời một câu hỏi mà sản phẩm chưa từng định nghĩa.", source_urls: sourcesForPackage.slice(0, 2).map((source) => source.url) },
+    { id: "slide-example", type: "example", title: "Ví dụ xuyên suốt", subtitle: "Biến một nhu cầu sản phẩm thành bài toán học được.", body: `Giả sử sản phẩm muốn ${section.title.toLowerCase()} để hỗ trợ đội vận hành. Trước khi xây model, hãy viết một mẫu input, output mong muốn và lỗi nào sẽ gây hậu quả lớn nhất; đó là điểm bắt đầu để chọn dữ liệu và cách đánh giá.`, bullets: ["Input: thông tin có sẵn tại thời điểm dự đoán", "Output: dự đoán hoặc quyết định cần trả về", "Success: một ngưỡng đo có thể kiểm tra lại"], takeaway: "Một ví dụ cụ thể tốt hơn một mô tả chung chung về AI.", source_urls: sourcesForPackage.map((source) => source.url).slice(0, 3) },
+    { id: "slide-pitfall", type: "pitfall", title: "Lỗi thường gặp", subtitle: "Đừng nhầm điểm số với giá trị sản phẩm.", body: "Một kết quả đẹp trên dữ liệu huấn luyện hoặc một metric duy nhất chưa đủ để kết luận hệ thống sẵn sàng. Hãy kiểm tra dữ liệu chưa thấy, các nhóm người dùng khác nhau và chi phí của từng loại lỗi.", bullets: ["Không đánh giá trên đúng dữ liệu đã dùng để fit", "Không chọn metric chỉ vì nó dễ báo cáo", "Không bỏ qua dữ liệu lệch hoặc label không đáng tin"], takeaway: "Điểm số chỉ có ý nghĩa khi gắn với cách dữ liệu được tạo và cách sản phẩm dùng dự đoán.", source_urls: sourcesForPackage.slice(0, 2).map((source) => source.url) },
+    { id: "slide-decision", type: "decision", title: "Checklist ra quyết định", subtitle: "Trước khi chuyển sang model hoặc code.", body: "Hãy thử giải thích lựa chọn của bạn như đang viết một note cho teammate. Nếu chưa trả lời được câu hỏi nào, đó là tín hiệu cần quay lại problem framing hoặc tìm thêm nguồn.", bullets: ["Tôi đang dự đoán gì và cho ai dùng?", "Loại lỗi nào đắt giá hơn trong bối cảnh này?", "Dữ liệu nào kiểm chứng được khả năng tổng quát hóa?", "Kết quả sẽ được theo dõi lại sau triển khai ra sao?"], takeaway: "Một quyết định tốt phải nói được cả lợi ích, giới hạn và cách kiểm chứng.", source_urls: sourcesForPackage.map((source) => source.url).slice(0, 3) },
+    { id: "slide-check", type: "checkpoint", title: "Tự kiểm tra trước khi rời section", subtitle: "Nói lại bằng ngôn ngữ của chính bạn.", body: `Nếu bạn có thể giải thích ${section.title} cho một teammate bằng một ví dụ dữ liệu, một tiêu chí đo và một rủi ro, bạn đã sẵn sàng làm mastery test. Nếu chưa, hãy quay lại slide có điểm còn mơ hồ và hỏi tutor theo source ID.`, bullets: ["Viết định nghĩa trong một câu", "Nêu một ví dụ input → output", "Chọn cách đo và giải thích vì sao", "Nói một điều có thể làm kết quả sai"], takeaway: "Explain-back là bằng chứng tốt hơn việc đọc lướt qua slide.", checkpoint: `Bạn sẽ dùng ${section.title} ở bước nào trong một hệ thống AI Engineer?`, source_urls: sourcesForPackage.slice(0, 2).map((source) => source.url) },
+    { id: "slide-recap", type: "recap", title: "Chốt lại", subtitle: "Từ hiểu → thử → kiểm chứng.", body: `Bạn vừa đi qua một khung học cho ${section.title}: hiểu khái niệm, nhìn ví dụ, nhận diện lỗi và chuẩn bị một quyết định có thể kiểm tra. Hãy hoàn thành checklist rồi chuyển sang mastery test để chứng minh khả năng áp dụng.`, bullets: ["Hiểu khái niệm cốt lõi", "Liên hệ với một bài toán sản phẩm", "Biết nguồn để đọc sâu hơn", "Sẵn sàng transfer sang tình huống mới"], takeaway: "Học xong là khi bạn có thể giải thích lựa chọn và chỉ ra cách kiểm chứng.", source_urls: sourcesForPackage.map((source) => source.url).slice(0, 3) },
+  ],
   concepts: [
     { title: `Khái niệm cốt lõi của ${section.title}`, body: `Nắm định nghĩa, đầu vào và đầu ra của ${section.title} trước khi chọn model hoặc công cụ.` },
     { title: "Quyết định trong thực tế", body: "Liên hệ khái niệm với dữ liệu, metric và trade-off của một sản phẩm ML." },
@@ -678,7 +727,7 @@ const runLearningPackage = async (input) => {
         response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
-          body: JSON.stringify({ model: modelFor(candidate), messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS || 800), response_format: { type: "json_object" } }),
+          body: JSON.stringify({ model: modelFor(candidate), messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: Number(process.env.LEARNING_PACKAGE_MAX_TOKENS || 3200), response_format: { type: "json_object" } }),
         });
         const content = response.choices?.[0]?.message?.content;
         response = parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content);

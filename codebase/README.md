@@ -14,7 +14,7 @@ Prototype CP3 cho lát cắt: người học muốn trở thành AI Engineer, t�
 - `server/index.js` đọc PDF local bằng `pdftotext`, chọn các đoạn liên quan làm document context và ghi input, prompt, phản hồi mô hình, output cùng metadata vào `AI_TRACE_FILE`.
 - `/api/learning/analyze` là quyết định AI trung tâm: xếp ưu tiên competency và learning path từ diagnostic.
 - `/api/sources/discover` tìm nguồn học bổ sung theo section bằng web grounding của provider; backend chỉ trả về URL HTTPS thuộc allowlist tài liệu chính thống và có curated catalog dự phòng.
-- `/api/learning/package` chuyển các nguồn đã lọc thành learning package gồm mục tiêu, learning cards, ví dụ, bài thực hành và câu transfer; nếu tạo live thất bại, nội dung section an toàn vẫn được giữ lại.
+- `/api/learning/package` chuyển các nguồn đã lọc thành learning deck 7–9 slide gồm mục tiêu, giải thích, ví dụ, lỗi thường gặp, checklist, self-check và nguồn riêng cho từng slide; nếu tạo live thất bại, deck catalog an toàn vẫn được giữ lại.
 - Gemini là provider ưu tiên; khi lỗi/quota, server thử OpenRouter; nếu cả hai không dùng được thì mới fallback deterministic.
 - Nội dung source được map theo các chapter `GML-CH01` đến `GML-CH13` của `Grokking Machine Learning`.
 
@@ -22,7 +22,7 @@ Prototype CP3 cho lát cắt: người học muốn trở thành AI Engineer, t�
 
 - Điểm câu hỏi, ngưỡng pass 80% và unlock section do client kiểm soát, không giao cho model.
 - Bộ câu diagnostic/mastery/final là bộ câu hỏi được nhóm biên soạn dựa trên tài liệu, không phải output ngẫu nhiên ở runtime.
-- Mỗi section có learning package gồm mục tiêu, learning cards, ví dụ transfer, checklist, mastery test và reference desk. Nguồn được AI tìm thêm chỉ là đề xuất có kiểm chứng URL, không tự động thay đổi curriculum.
+- Khi người học mở section, hệ thống tìm nguồn trước rồi mới tạo learning deck. Deck và nguồn được lưu trong session của tài khoản để có thể reload; source URL chỉ được nhận nếu HTTPS và thuộc allowlist. Người học có thể chuyển slide bằng nút điều khiển hoặc phím `←` / `→`.
 - Không commit PDF, API key, `.env` hoặc dữ liệu người học vào repo.
 
 ## Chạy local

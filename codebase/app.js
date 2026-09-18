@@ -67,6 +67,8 @@
     sourceDiscoveryLoading: false,
     generatedPackages: {},
     packageLoading: false,
+    studyContentLoading: "",
+    studySlideIndices: {},
     finalStarted: false,
     finalIndex: 0,
     finalAnswers: {},
@@ -90,7 +92,7 @@
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
   defaultState.view = "setup";
-  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
   const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
   const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
   const learnerName = () => currentUser?.name || pack.learner.name;
@@ -196,6 +198,8 @@
       if (!Array.isArray(state.assessmentQuestions.final)) state.assessmentQuestions.final = [];
       if (!state.assessmentMeta || typeof state.assessmentMeta !== "object") state.assessmentMeta = { mastery: {} };
       if (!state.assessmentMeta.mastery || typeof state.assessmentMeta.mastery !== "object") state.assessmentMeta.mastery = {};
+      if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
+      state.studyContentLoading = "";
       if (!pack.sections.some((section) => section.id === state.selectedSectionId)) state.selectedSectionId = pack.sections[0].id;
       // Migrate sessions that used the removed option to the diagnostic flow.
       if (state.pathLevel === "intermediate") state.pathLevel = "beginner";
@@ -651,7 +655,13 @@
     syncSidebar();
   };
   sidebarMedia.addEventListener("change", closeSidebar);
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSidebar(); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeSidebar();
+    if (state.view === "study" && !["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(document.activeElement?.tagName)) {
+      if (event.key === "ArrowRight") { event.preventDefault(); moveStudySlide(1); }
+      if (event.key === "ArrowLeft") { event.preventDefault(); moveStudySlide(-1); }
+    }
+  });
   document.querySelectorAll(".nav-item, .sidebar-link").forEach((item) => {
     const label = item.querySelector("span:nth-child(2)")?.textContent || item.textContent.trim();
     item.setAttribute("aria-label", label);
@@ -853,6 +863,66 @@
     <aside class="journey-note"><span class="rationale-icon indigo">${icon("route")}</span><div><strong>Vì sao đi theo thứ tự này?</strong><p>Prerequisite giữ cho mỗi bước vừa sức; mastery test xác nhận bạn thật sự có thể áp dụng trước khi avatar tiến lên. Trạng thái luôn có nhãn và biểu tượng, không chỉ dựa vào màu.</p>${roadmapReferenceLink("Mở tham chiếu AI Engineer")}</div><button class="link-button" type="button" data-view="tutor">Hỏi AI tutor ${icon("arrow")}</button></aside>`;
   };
 
+  const legacySlideDeck = (section, studyPackage) => {
+    const sourceUrls = Array.isArray(studyPackage.source_urls) ? studyPackage.source_urls : [];
+    const concepts = Array.isArray(studyPackage.concepts) && studyPackage.concepts.length ? studyPackage.concepts : (section.concepts || []);
+    const conceptSlides = concepts.slice(0, 3).map((concept, index) => ({
+      id: `legacy-concept-${index + 1}`,
+      type: "concept",
+      title: concept.title,
+      subtitle: `Khái niệm ${String(index + 1).padStart(2, "0")}`,
+      body: concept.body,
+      bullets: ["Nói lại khái niệm bằng một câu", "Liên hệ với input và output", "Chỉ ra quyết định mà nó hỗ trợ"],
+      takeaway: concept.body,
+      source_urls: sourceUrls,
+    }));
+    return [
+      { id: "legacy-orientation", type: "title", title: section.title, subtitle: "Bài học theo format slide", body: section.description || section.objective || "Đi từ khái niệm đến một quyết định có thể kiểm chứng.", bullets: ["Hiểu mục tiêu của section", "Đọc ví dụ trước khi chọn công cụ", "Kết thúc bằng một bước tự kiểm"], takeaway: section.objective || "Hiểu để áp dụng, không chỉ để nhớ.", source_urls: sourceUrls },
+      ...conceptSlides,
+      { id: "legacy-example", type: "example", title: "Đưa vào một bài toán thật", subtitle: "Input → decision → measurement", body: studyPackage.example || `Chọn một bài toán sản phẩm và mô tả ${section.title} ảnh hưởng thế nào đến quyết định triển khai.`, bullets: section.checklist || ["Xác định input", "Nêu output", "Chọn cách đo"], takeaway: "Một ví dụ cụ thể giúp lộ ra giả định còn thiếu.", source_urls: sourceUrls },
+      { id: "legacy-practice", type: "decision", title: "Thử làm ngay", subtitle: "Biến kiến thức thành một quyết định", body: "Hãy viết câu trả lời ngắn như đang gửi cho teammate. Sau đó đối chiếu với checklist và sửa phần còn mơ hồ.", bullets: studyPackage.practice_steps || section.checklist || [], takeaway: "Không có quyết định nào tốt nếu chưa nói rõ cách kiểm chứng.", source_urls: sourceUrls },
+      { id: "legacy-check", type: "checkpoint", title: "Tự kiểm tra", subtitle: "Explain-back trước khi làm mastery", body: studyPackage.transfer_question || `Bạn sẽ áp dụng ${section.title} ở bước nào?`, bullets: ["Nêu định nghĩa", "Cho một ví dụ", "Chọn một cách đo", "Nói một rủi ro"], takeaway: "Nếu bạn giải thích được cho teammate, bạn đã sẵn sàng chuyển sang bài test.", checkpoint: studyPackage.transfer_question || `Bạn sẽ áp dụng ${section.title} ở bước nào?`, source_urls: sourceUrls },
+      { id: "legacy-recap", type: "recap", title: "Chốt section", subtitle: "Hiểu → thử → kiểm chứng", body: "Hoàn thành checklist, sau đó làm mastery test để xác nhận khả năng áp dụng vào tình huống mới.", bullets: ["Nắm khái niệm cốt lõi", "Biết nguồn đọc sâu hơn", "Sẵn sàng làm mastery test"], takeaway: "Học xong khi bạn biết mình đúng ở đâu và cần kiểm chứng gì thêm.", source_urls: sourceUrls },
+    ];
+  };
+
+  const slideTypeLabel = (type) => ({ title: "MỞ ĐẦU", concept: "KHÁI NIỆM", process: "KHUNG SUY NGHĨ", example: "VÍ DỤ", pitfall: "DỄ NHẦM", decision: "RA QUYẾT ĐỊNH", checkpoint: "TỰ KIỂM", recap: "TÓM TẮT" }[type] || "LEARNING SLIDE");
+
+  const renderSlideDeck = (section, studyPackage, sourceResult) => {
+    const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
+    if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
+    const rawIndex = Number(state.studySlideIndices[section.id] || 0);
+    const slideIndex = Math.max(0, Math.min(slides.length - 1, rawIndex));
+    const slide = slides[slideIndex];
+    state.studySlideIndices[section.id] = slideIndex;
+    const sourceUrls = Array.isArray(slide.source_urls) ? slide.source_urls : [];
+    const sourceCount = sourceUrls.length || (sourceResult?.sources?.length || 0);
+    const sourceLinks = sourceUrls.length ? externalSourceLinks(sourceUrls) : "";
+    return `<section class="learning-deck" aria-label="Learning slide deck cho ${escapeHtml(section.title)}">
+      <div class="deck-header"><div><span class="content-label">SOURCE-GROUNDED LEARNING DECK</span><h2>Học theo từng slide, hiểu đến nơi</h2><p>Mỗi slide có ý chính, ví dụ, bước áp dụng và nguồn tham chiếu để bạn đọc sâu hơn.</p></div><div class="deck-counter" aria-live="polite"><strong>${String(slideIndex + 1).padStart(2, "0")}</strong><span>/ ${String(slides.length).padStart(2, "0")} slides</span></div></div>
+      <div class="deck-stage slide-type-${escapeHtml(slide.type || "concept")}" tabindex="0" aria-label="Slide ${slideIndex + 1}: ${escapeHtml(slide.title)}">
+        <div class="deck-stage-top"><span class="deck-slide-type">${escapeHtml(slideTypeLabel(slide.type))}</span><span class="deck-source-count">${icon("shield")} ${sourceCount} nguồn đã lọc</span></div>
+        <div class="deck-slide-copy"><h3>${escapeHtml(slide.title)}</h3>${slide.subtitle ? `<p class="deck-slide-subtitle">${escapeHtml(slide.subtitle)}</p>` : ""}<p class="deck-slide-body">${escapeHtml(slide.body)}</p><ul class="deck-bullets">${(slide.bullets || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>
+        <div class="deck-takeaway"><span>${icon("spark")} TAKEAWAY</span><strong>${escapeHtml(slide.takeaway)}</strong>${slide.checkpoint ? `<p><b>Tự hỏi:</b> ${escapeHtml(slide.checkpoint)}</p>` : ""}</div>
+        ${sourceLinks ? `<div class="deck-sources"><span>Nguồn của slide</span>${sourceLinks}</div>` : ""}
+      </div>
+      <div class="deck-controls"><button class="outline-button compact-button" type="button" data-action="prev-slide" aria-label="Slide trước" ${slideIndex === 0 ? "disabled" : ""}>${icon("back")} Trước</button><div class="deck-dots" role="tablist" aria-label="Chọn slide">${slides.map((item, index) => `<button type="button" role="tab" class="deck-dot ${index === slideIndex ? "is-active" : ""}" aria-label="Mở slide ${index + 1}: ${escapeHtml(item.title)}" aria-selected="${index === slideIndex}" data-action="select-slide" data-index="${index}"></button>`).join("")}</div><button class="primary-button compact-button" type="button" data-action="next-slide" aria-label="Slide tiếp theo" ${slideIndex === slides.length - 1 ? "disabled" : ""}>Tiếp theo ${icon("arrow")}</button></div>
+      <p class="deck-keyboard-hint">Mẹo: dùng phím ← → để chuyển slide. Đến slide cuối, hoàn thành checklist bên cạnh để mở mastery test.</p>
+    </section>`;
+  };
+
+  const moveStudySlide = (delta) => {
+    if (state.view !== "study") return;
+    const section = getSection();
+    const studyPackage = state.generatedPackages[section.id] || section;
+    const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
+    if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
+    const current = Number(state.studySlideIndices[section.id] || 0);
+    state.studySlideIndices[section.id] = Math.max(0, Math.min(slides.length - 1, current + delta));
+    persistState();
+    render();
+  };
+
   const renderLessonDepth = (section, studyPackage) => {
     const lessonSections = studyPackage.lessonSections || section.lessonSections || [];
     const commonMistakes = studyPackage.commonMistakes || section.commonMistakes || [];
@@ -868,13 +938,16 @@
     const status = sectionState(section, index);
     const sourceResult = state.discoveredSources[section.id];
     const studyPackage = state.generatedPackages[section.id] || section;
+    const hasGeneratedDeck = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6;
+    const contentIsPreparing = state.studyContentLoading === section.id;
+    if (API_BASE && authToken && !hasGeneratedDeck && !contentIsPreparing) window.queueMicrotask(() => prepareSectionLearning(section));
     if (status === "locked") {
       return `${pageHeader("STUDY SESSION", "Section đang được khóa", "Hoàn thành section trước đó với ít nhất 80% để mở nội dung này.", `<button class="outline-button compact-button" type="button" data-view="roadmap">Về roadmap ${icon("back")}</button>`)}<div class="locked-state panel-card"><span class="locked-state-icon">${icon("shield")}</span><h2>Chưa đến bước này</h2><p>Pathwise giữ thứ tự học theo prerequisite để bạn không phải nhảy qua phần nền tảng.</p><button class="primary-button" type="button" data-action="go-section" data-section-id="${escapeHtml(nextRecommendedSection().id)}">Mở section đang ưu tiên ${icon("arrow")}</button></div>`;
     }
     const checkedCount = state.studyChecks.length;
     return `${pageHeader(`${section.number} · STUDY SESSION`, escapeHtml(section.title), escapeHtml(section.description), `<span class="session-time">${icon("clock")} ${studyPackage.estimated_minutes || Number.parseInt(section.duration, 10)} phút</span>`)}
       <div class="study-progress-row"><div><span>SECTION PROGRESS</span><strong>${state.studyCompleted ? "100" : checkedCount ? "66" : "24"}%</strong></div><div class="progress-bar"><i style="width:${state.studyCompleted ? 100 : checkedCount ? 66 : 24}%"></i></div><span class="study-progress-note">${state.studyCompleted ? "Sẵn sàng làm mastery test" : "Đọc · kiểm tra · áp dụng"}</span></div>
-      <div class="study-layout"><article class="lesson-content"><div class="lesson-intro"><span class="content-label">LEARNING PACKAGE · MỤC TIÊU SECTION</span><h2>${escapeHtml(studyPackage.objective)}</h2><div class="package-facts"><span>${icon("book")} ${studyPackage.concepts.length} learning cards</span><span>${icon("spark")} 1 ví dụ transfer</span><span>${icon("check")} ${section.masteryQuestions.length} câu mastery</span></div><div class="source-row-inline">${sourceChips(section.sourceIds)}</div></div><div class="concept-list">${studyPackage.concepts.map((concept, index) => `<article class="concept-card"><span class="concept-number">0${index + 1}</span><div><h3>${escapeHtml(concept.title)}</h3><p>${escapeHtml(concept.body)}</p></div></article>`).join("")}</div>${renderLessonDepth(section, studyPackage)}<div class="application-card"><div class="application-heading"><span class="application-icon">${icon("spark")}</span><div><span class="content-label">VÍ DỤ ÁP DỤNG</span><h3>Đưa vào quyết định sản phẩm</h3></div></div><p>${escapeHtml(studyPackage.example)}</p></div><div class="practice-card"><div class="application-heading"><span class="application-icon">${icon("check")}</span><div><span class="content-label">BÀI THỰC HÀNH NGẮN</span><h3>Biến kiến thức thành một quyết định</h3></div></div><ol>${(studyPackage.practice_steps || section.checklist).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="transfer-callout"><span class="application-icon">${icon("spark")}</span><div><span class="content-label">TRANSFER CHECK</span><h3>${escapeHtml(studyPackage.transfer_question || `Bạn sẽ áp dụng ${section.title} ở bước nào?`)}</h3></div></div></div><section class="source-discovery panel-card"><div class="source-discovery-header"><div><span class="content-label">REFERENCE DESK</span><h2>Nguồn học thêm cho section này</h2><p>${sourceResult?.note ? escapeHtml(sourceResult.note) : "Nếu tài liệu hiện có chưa đủ, Pathwise sẽ tìm thêm nguồn chính thống và hiển thị rõ lý do lựa chọn."}</p></div><div class="source-actions"><button class="outline-button compact-button" type="button" data-action="discover-sources" ${state.sourceDiscoveryLoading ? "disabled" : ""}>${state.sourceDiscoveryLoading ? "Đang tìm..." : "Tìm nguồn chính thống"} ${icon("arrow")}</button>${sourceResult?.sources?.length ? `<button class="secondary-button compact-button" type="button" data-action="generate-package" ${state.packageLoading ? "disabled" : ""}>${state.packageLoading ? "Đang tạo bài..." : "Tạo bài học từ nguồn"} ${icon("spark")}</button>` : ""}</div></div><div class="reference-grid">${sourceReferenceCards(sourceResult)}</div></section></article><aside class="study-aside"><div class="study-control panel-card"><div class="panel-kicker-row"><span class="panel-kicker">FOCUS SESSION</span>${state.focusStarted ? statusBadge("Đang ghi nhận", "success") : statusBadge("Chưa bắt đầu", "neutral")}</div><div class="focus-timer"><strong>${formatFocusTimer(state.focusStarted && focusRemainingSeconds > 0 ? focusRemainingSeconds : (Number.parseInt(section.duration, 10) || 10) * 60)}</strong><span>thời lượng đề xuất</span></div><p>${state.focusStarted ? "Timer đang chạy khi bạn vào section. Bạn có thể đọc và đánh dấu từng mục tiêu; phiên học không khóa cứng nếu cần tạm dừng." : "Bắt đầu timer để ghi nhận một phiên học có chủ đích."}</p></div><div class="checklist-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">LEARNING CHECKLIST</span><span class="checklist-count">${checkedCount}/${section.checklist.length}</span></div>${section.checklist.map((item, index) => `<button class="checklist-item ${state.studyChecks.includes(index) ? "is-checked" : ""}" type="button" data-action="toggle-check" data-index="${index}" aria-pressed="${state.studyChecks.includes(index)}"><span class="checklist-box">${state.studyChecks.includes(index) ? icon("check") : ""}</span><span>${escapeHtml(item)}</span></button>`).join("")}</div></aside></div><div class="study-footer"><button class="quiet-button" type="button" data-view="roadmap">${icon("back")} Về roadmap</button><div><button class="primary-button" type="button" data-action="complete-study">${state.studyCompleted ? "Đã hoàn thành section" : "Đánh dấu đã học"} ${icon("check")}</button><button class="secondary-button" type="button" data-action="start-mastery" ${state.studyCompleted ? "" : "disabled"}>Làm mastery test ${icon("arrow")}</button></div></div>`;
+      <div class="study-layout"><article class="lesson-content"><div class="lesson-intro"><span class="content-label">LEARNING PACKAGE · MỤC TIÊU SECTION</span><h2>${escapeHtml(studyPackage.objective || section.objective)}</h2><div class="package-facts"><span>${icon("book")} ${hasGeneratedDeck ? `${studyPackage.slides.length} learning slides` : "Đang chuẩn bị slide"}</span><span>${icon("spark")} Có ví dụ và self-check</span><span>${icon("check")} ${section.masteryQuestions.length} câu mastery</span></div><div class="source-row-inline">${sourceChips(section.sourceIds)}</div></div>${renderSlideDeck(section, studyPackage, sourceResult)}${renderLessonDepth(section, studyPackage)}<div class="application-card"><div class="application-heading"><span class="application-icon">${icon("spark")}</span><div><span class="content-label">VÍ DỤ ÁP DỤNG</span><h3>Đưa vào quyết định sản phẩm</h3></div></div><p>${escapeHtml(studyPackage.example || `Chọn một bài toán sản phẩm và mô tả ${section.title} ảnh hưởng thế nào đến quyết định triển khai.`)}</p></div><div class="practice-card"><div class="application-heading"><span class="application-icon">${icon("check")}</span><div><span class="content-label">BÀI THỰC HÀNH NGẮN</span><h3>Biến kiến thức thành một quyết định</h3></div></div><ol>${(studyPackage.practice_steps || section.checklist).map((step) => `<li>${escapeHtml(step)}</li>`).join("")}</ol><div class="transfer-callout"><span class="application-icon">${icon("spark")}</span><div><span class="content-label">TRANSFER CHECK</span><h3>${escapeHtml(studyPackage.transfer_question || `Bạn sẽ áp dụng ${section.title} ở bước nào?`)}</h3></div></div></div><section class="source-discovery panel-card"><div class="source-discovery-header"><div><span class="content-label">REFERENCE DESK</span><h2>Nguồn tạo bài học</h2><p>${contentIsPreparing ? "Đang tìm nguồn chính thống và tạo learning deck cho section này…" : sourceResult?.note ? escapeHtml(sourceResult.note) : "Pathwise sẽ tìm nguồn chính thống trước, sau đó tạo nội dung slide và gắn nguồn theo từng slide."}</p></div><div class="source-actions"><button class="outline-button compact-button" type="button" data-action="discover-sources" ${state.sourceDiscoveryLoading || contentIsPreparing ? "disabled" : ""}>${state.sourceDiscoveryLoading ? "Đang tìm..." : "Tìm nguồn chính thống"} ${icon("arrow")}</button>${sourceResult?.sources?.length ? `<button class="secondary-button compact-button" type="button" data-action="generate-package" ${state.packageLoading || contentIsPreparing ? "disabled" : ""}>${state.packageLoading ? "Đang tạo bài..." : "Tạo lại learning deck"} ${icon("spark")}</button>` : ""}</div></div><div class="reference-grid">${sourceReferenceCards(sourceResult)}</div></section></article><aside class="study-aside"><div class="study-control panel-card"><div class="panel-kicker-row"><span class="panel-kicker">FOCUS SESSION</span>${state.focusStarted ? statusBadge("Đang ghi nhận", "success") : statusBadge("Chưa bắt đầu", "neutral")}</div><div class="focus-timer"><strong>${formatFocusTimer(state.focusStarted && focusRemainingSeconds > 0 ? focusRemainingSeconds : (Number.parseInt(section.duration, 10) || 10) * 60)}</strong><span>thời lượng đề xuất</span></div><p>${state.focusStarted ? "Timer đang chạy khi bạn vào section. Bạn có thể đọc và đánh dấu từng mục tiêu; phiên học không khóa cứng nếu cần tạm dừng." : "Bắt đầu timer để ghi nhận một phiên học có chủ đích."}</p></div><div class="checklist-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">LEARNING CHECKLIST</span><span class="checklist-count">${checkedCount}/${section.checklist.length}</span></div>${section.checklist.map((item, index) => `<button class="checklist-item ${state.studyChecks.includes(index) ? "is-checked" : ""}" type="button" data-action="toggle-check" data-index="${index}" aria-pressed="${state.studyChecks.includes(index)}"><span class="checklist-box">${state.studyChecks.includes(index) ? icon("check") : ""}</span><span>${escapeHtml(item)}</span></button>`).join("")}</div></aside></div><div class="study-footer"><button class="quiet-button" type="button" data-view="roadmap">${icon("back")} Về roadmap</button><div><button class="primary-button" type="button" data-action="complete-study">${state.studyCompleted ? "Đã hoàn thành section" : "Đánh dấu đã học"} ${icon("check")}</button><button class="secondary-button" type="button" data-action="start-mastery" ${state.studyCompleted ? "" : "disabled"}>Làm mastery test ${icon("arrow")}</button></div></div>`;
   };
 
   const assessmentQuestion = (question, index, total, kind) => {
@@ -1083,7 +1156,7 @@
   };
 
   const reset = () => {
-    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
+    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, studyContentLoading: "", studySlideIndices: {}, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
     try { localStorage.removeItem(stateStorageKey()); } catch {}
     window.history.replaceState(null, "", "#setup");
     render();
@@ -1128,19 +1201,54 @@
     window.setTimeout(() => document.querySelector(".chat-messages")?.scrollTo({ top: 1000, behavior: "smooth" }), 20);
   };
 
+  const discoverSectionSources = async (section) => {
+    const response = await apiRequest("/api/sources/discover", {
+      topic_id: pack.topic.id,
+      section_id: section.id,
+      query: `${section.title}. ${section.objective || section.description || "AI Engineer learning section"}`,
+    });
+    state.discoveredSources[section.id] = response.data;
+    state.agentMeta = response.meta;
+    return response.data;
+  };
+
+  const createSectionLearningPackage = async (section, sourceResult) => {
+    const response = await apiRequest("/api/learning/package", {
+      topic_id: pack.topic.id,
+      section_id: section.id,
+      level: "beginner-to-intermediate",
+      minutes: state.timePlan,
+      sources: sourceResult.sources,
+    });
+    state.generatedPackages[section.id] = response.data;
+    state.agentMeta = response.meta;
+    return response.data;
+  };
+
+  const prepareSectionLearning = async (section) => {
+    if (!API_BASE || !authToken || state.generatedPackages[section.id]?.slides?.length >= 6 || state.studyContentLoading === section.id) return;
+    state.studyContentLoading = section.id;
+    render();
+    try {
+      const sourceResult = state.discoveredSources[section.id]?.sources?.length
+        ? state.discoveredSources[section.id]
+        : await discoverSectionSources(section);
+      if (sourceResult?.sources?.length) await createSectionLearningPackage(section, sourceResult);
+    } catch {
+      state.discoveredSources[section.id] = state.discoveredSources[section.id] || { status: "error", sources: [], note: "Không thể tìm nguồn hoặc tạo learning deck trong phiên này." };
+    }
+    if (state.studyContentLoading === section.id) state.studyContentLoading = "";
+    persistState();
+    render();
+  };
+
   const discoverSources = async () => {
     const section = getSection();
     state.sourceDiscoveryLoading = true;
     render();
     try {
-      const response = await apiRequest("/api/sources/discover", {
-        topic_id: pack.topic.id,
-        section_id: section.id,
-        query: `${section.title}. ${section.objective}`,
-      });
-      state.discoveredSources[section.id] = response.data;
-      state.agentMeta = response.meta;
-      showToast(response.meta?.live ? "Đã tìm và lọc nguồn chính thống." : "Đang dùng catalog nguồn chính thống đã kiểm duyệt.");
+      const result = await discoverSectionSources(section);
+      showToast(result?.status === "ok" ? "Đã tìm và lọc nguồn chính thống." : "Đang dùng catalog nguồn chính thống đã kiểm duyệt.");
     } catch {
       state.discoveredSources[section.id] = { status: "error", sources: [], note: "Không thể kết nối dịch vụ tìm nguồn trong phiên này." };
       showToast("Chưa tìm được nguồn. Bạn có thể thử lại sau.");
@@ -1156,16 +1264,8 @@
     state.packageLoading = true;
     render();
     try {
-      const response = await apiRequest("/api/learning/package", {
-        topic_id: pack.topic.id,
-        section_id: section.id,
-        level: "beginner-to-intermediate",
-        minutes: state.timePlan,
-        sources: sourceResult.sources,
-      });
-      state.generatedPackages[section.id] = response.data;
-      state.agentMeta = response.meta;
-      showToast(response.meta?.live ? "Đã tạo learning package từ nguồn đã kiểm chứng." : "Đã dùng learning package dự phòng an toàn.");
+      const packageData = await createSectionLearningPackage(section, sourceResult);
+      showToast(packageData?.status === "ok" ? "Đã tạo learning deck từ nguồn đã kiểm chứng." : "Đã dùng learning deck dự phòng an toàn.");
     } catch {
       showToast("Chưa tạo được bài học mới; nội dung section hiện tại vẫn được giữ nguyên.");
     }
@@ -1273,6 +1373,9 @@
     }
     if (action === "discover-sources") discoverSources();
     if (action === "generate-package") generateLearningPackage();
+    if (action === "prev-slide") moveStudySlide(-1);
+    if (action === "next-slide") moveStudySlide(1);
+    if (action === "select-slide") { state.studySlideIndices[state.selectedSectionId] = Number(target.dataset.index) || 0; persistState(); render(); }
     if (action === "toggle-check") { const item = Number(target.dataset.index); state.studyChecks = state.studyChecks.includes(item) ? state.studyChecks.filter((index) => index !== item) : [...state.studyChecks, item]; render(); }
     if (action === "complete-study") { const section = getSection(); if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; render(); showToast("Section đã được đánh dấu hoàn thành. Mastery test đã mở."); }
     if (action === "start-mastery") { if (!state.studyCompleted) { showToast("Hãy hoàn thành section trước khi làm mastery test."); return; } state.masteryIndex = 0; state.masteryAnswers = {}; state.masterySubmitted = false; state.remediationData = null; state.remediationText = ""; state.remediationChecked = false; loadAssessment("mastery", state.selectedSectionId); }
