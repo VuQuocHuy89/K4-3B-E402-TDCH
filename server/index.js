@@ -29,6 +29,8 @@ const traceFile = process.env.AI_TRACE_FILE || "/tmp/pathwise-agent-trace.jsonl"
 const traceLimit = 12000;
 let dbPool = null;
 let dbInitError = null;
+const memoryUsers = new Map();
+const memoryAuthSessions = new Map();
 if (process.env.DATABASE_URL) {
   try {
     const { Pool } = require("pg");
@@ -59,11 +61,29 @@ const initDatabase = async () => {
   if (!dbPool) return;
   try {
     await dbPool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+      CREATE TABLE IF NOT EXISTS auth_sessions (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       CREATE TABLE IF NOT EXISTS learning_sessions (
         session_key TEXT PRIMARY KEY,
+        user_id TEXT,
         state JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      )
+      );
+      ALTER TABLE learning_sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
+      CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx ON auth_sessions(user_id);
+      CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx ON auth_sessions(expires_at)
     `);
   } catch (error) {
     dbInitError = error.message;
@@ -71,18 +91,101 @@ const initDatabase = async () => {
 };
 
 const sessionKeyIsValid = (value) => typeof value === "string" && value.trim().length >= 3 && value.trim().length <= 160;
-const loadSession = async (sessionKey) => {
-  if (!dbPool || !sessionKeyIsValid(sessionKey)) return null;
-  const result = await dbPool.query("SELECT state, updated_at FROM learning_sessions WHERE session_key = $1", [sessionKey.trim()]);
+const scopedSessionKey = (userId, sessionKey) => `${userId}:${String(sessionKey).trim()}`.slice(0, 160);
+const loadSession = async (userId, sessionKey) => {
+  if (!dbPool || !sessionKeyIsValid(sessionKey) || !userId) return null;
+  const result = await dbPool.query("SELECT state, updated_at FROM learning_sessions WHERE session_key = $1 AND user_id = $2", [scopedSessionKey(userId, sessionKey), userId]);
   return result.rows[0] || null;
 };
-const saveSession = async (sessionKey, state) => {
-  if (!dbPool || !sessionKeyIsValid(sessionKey) || !state || typeof state !== "object" || Array.isArray(state)) return false;
+const saveSession = async (userId, sessionKey, state) => {
+  if (!dbPool || !userId || !sessionKeyIsValid(sessionKey) || !state || typeof state !== "object" || Array.isArray(state)) return false;
   await dbPool.query(
-    "INSERT INTO learning_sessions (session_key, state, updated_at) VALUES ($1, $2::jsonb, NOW()) ON CONFLICT (session_key) DO UPDATE SET state = EXCLUDED.state, updated_at = NOW()",
-    [sessionKey.trim(), JSON.stringify(state)],
+    "INSERT INTO learning_sessions (session_key, user_id, state, updated_at) VALUES ($1, $2, $3::jsonb, NOW()) ON CONFLICT (session_key) DO UPDATE SET user_id = EXCLUDED.user_id, state = EXCLUDED.state, updated_at = NOW()",
+    [scopedSessionKey(userId, sessionKey), userId, JSON.stringify(state)],
   );
   return true;
+};
+
+const normaliseEmail = (value) => String(value || "").trim().toLowerCase();
+const publicUser = (user) => ({ id: user.id, name: user.name, email: user.email, created_at: user.created_at || user.createdAt });
+const passwordIsValid = (value) => typeof value === "string" && value.length >= 6 && value.length <= 200;
+const emailIsValid = (value) => /^\S+@\S+\.\S+$/.test(value);
+const hashPassword = async (password, salt = crypto.randomBytes(16)) => {
+  const derived = await new Promise((resolve, reject) => crypto.scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 }, (error, key) => error ? reject(error) : resolve(key)));
+  return `scrypt$${salt.toString("base64url")}$${Buffer.from(derived).toString("base64url")}`;
+};
+const verifyPassword = async (password, stored) => {
+  const [, saltText, digestText] = String(stored || "").split("$");
+  if (!saltText || !digestText) return false;
+  try {
+    const salt = Buffer.from(saltText, "base64url");
+    const expected = Buffer.from(digestText, "base64url");
+    const derived = await new Promise((resolve, reject) => crypto.scrypt(password, salt, expected.length, { N: 16384, r: 8, p: 1 }, (error, key) => error ? reject(error) : resolve(key)));
+    return expected.length === derived.length && crypto.timingSafeEqual(expected, derived);
+  } catch { return false; }
+};
+const tokenHash = (token) => crypto.createHash("sha256").update(token).digest("hex");
+const createAccessToken = () => crypto.randomBytes(32).toString("base64url");
+const authTokenFromRequest = (req) => {
+  const header = String(req.headers.authorization || "");
+  return header.startsWith("Bearer ") ? header.slice(7).trim() : "";
+};
+const saveAuthSession = async (userId) => {
+  const token = createAccessToken();
+  const hash = tokenHash(token);
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  if (dbPool) {
+    await dbPool.query("INSERT INTO auth_sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)", [hash, userId, expiresAt]);
+  } else {
+    memoryAuthSessions.set(hash, { userId, expiresAt: expiresAt.toISOString() });
+  }
+  return { token, expiresAt };
+};
+const deleteAuthSession = async (token) => {
+  if (!token) return;
+  const hash = tokenHash(token);
+  if (dbPool) await dbPool.query("DELETE FROM auth_sessions WHERE token_hash = $1", [hash]);
+  else memoryAuthSessions.delete(hash);
+};
+const userById = async (userId) => {
+  if (!userId) return null;
+  if (dbPool) {
+    const result = await dbPool.query("SELECT id, name, email, created_at FROM users WHERE id = $1", [userId]);
+    return result.rows[0] || null;
+  }
+  return memoryUsers.get(userId) || null;
+};
+const userByEmail = async (email) => {
+  if (dbPool) {
+    const result = await dbPool.query("SELECT id, name, email, password_hash, created_at FROM users WHERE email = $1", [email]);
+    return result.rows[0] || null;
+  }
+  return [...memoryUsers.values()].find((user) => user.email === email) || null;
+};
+const createUser = async ({ name, email, password }) => {
+  const passwordHash = await hashPassword(password);
+  const id = crypto.randomUUID();
+  if (dbPool) {
+    const result = await dbPool.query("INSERT INTO users (id, name, email, password_hash) VALUES ($1, $2, $3, $4) RETURNING id, name, email, created_at", [id, name, email, passwordHash]);
+    return result.rows[0];
+  }
+  const user = { id, name, email, password_hash: passwordHash, created_at: new Date().toISOString() };
+  memoryUsers.set(id, user);
+  return user;
+};
+const authenticatedUser = async (req) => {
+  const token = authTokenFromRequest(req);
+  if (!token) return null;
+  const hash = tokenHash(token);
+  if (dbPool) {
+    const result = await dbPool.query("SELECT u.id, u.name, u.email, u.created_at FROM auth_sessions s JOIN users u ON u.id = s.user_id WHERE s.token_hash = $1 AND s.expires_at > NOW()", [hash]);
+    if (!result.rows[0]) return null;
+    await dbPool.query("UPDATE auth_sessions SET last_seen_at = NOW() WHERE token_hash = $1", [hash]);
+    return result.rows[0];
+  }
+  const session = memoryAuthSessions.get(hash);
+  if (!session || new Date(session.expiresAt) <= new Date()) { memoryAuthSessions.delete(hash); return null; }
+  return userById(session.userId);
 };
 
 const documentState = {
@@ -100,7 +203,7 @@ const json = (res, status, value) => {
     "Content-Type": "application/json; charset=utf-8",
     "Content-Length": Buffer.byteLength(body),
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
   });
   res.end(body);
@@ -135,7 +238,7 @@ const providerOrder = () => {
 };
 
 const modelFor = (name) => name === "openrouter"
-  ? (process.env.OPENROUTER_MODEL || "openai/gpt-4o")
+  ? (process.env.OPENROUTER_MODEL || "openrouter/free")
   : (process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-3.6-flash");
 
 const loadDocument = async () => {
@@ -200,6 +303,86 @@ const schemas = {
     properties: { status: { type: "string" }, explanation: { type: "string" }, micro_tasks: { type: "array", items: { type: "string" } }, transfer_question: { type: "string" }, source_ids: { type: "array", items: { type: "string" } }, confidence: { type: "number" } },
     required: ["status", "explanation", "micro_tasks", "transfer_question", "source_ids", "confidence"],
   },
+  assessment: {
+    type: "object",
+    properties: {
+      status: { type: "string" },
+      mode: { type: "string" },
+      question_count: { type: "integer" },
+      questions: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            section_id: { type: "string" },
+            competency_id: { type: "string" },
+            label: { type: "string" },
+            prompt: { type: "string" },
+            options: { type: "array", items: { type: "string" } },
+            correct_index: { type: "integer" },
+            explanation: { type: "string" },
+            source_ids: { type: "array", items: { type: "string" } },
+          },
+          required: ["id", "section_id", "competency_id", "label", "prompt", "options", "correct_index", "explanation", "source_ids"],
+        },
+      },
+    },
+    required: ["status", "mode", "question_count", "questions"],
+  },
+};
+
+const assessmentCount = (input) => {
+  const mode = input.mode || "diagnostic";
+  const inputSections = Array.isArray(input.sections) ? input.sections : [];
+  if (mode === "mastery") {
+    const section = inputSections.find((item) => item.id === input.section_id);
+    return Math.max(3, Math.min(8, (section?.concepts?.length || section?.checklist?.length || 2) * 2));
+  }
+  const perSection = mode === "final" ? 2 : 2;
+  return Math.max(mode === "final" ? 6 : 4, Math.min(mode === "final" ? 24 : 20, Math.max(1, inputSections.length) * perSection));
+};
+
+const assessmentLabel = (mode) => mode === "mastery" ? "Section mastery" : mode === "final" ? "Topic transfer" : "Diagnostic";
+
+const fallbackAssessment = (input) => {
+  const mode = input.mode || "diagnostic";
+  const inputSections = (Array.isArray(input.sections) ? input.sections : []).filter((section) => section && section.id);
+  const desired = assessmentCount(input);
+  const sourceQuestions = Array.isArray(input.fallback_questions) ? input.fallback_questions : [];
+  const questions = [];
+  const addQuestion = (question, section, index) => {
+    if (!section || questions.length >= desired) return;
+    const sourceIds = validSources(question.source_ids || question.sourceIds || section.source_ids || section.sourceIds);
+    if (!sourceIds.length) return;
+    const concepts = Array.isArray(section.concepts) ? section.concepts : [];
+    const concept = concepts[index % Math.max(1, concepts.length)] || { title: "mục tiêu section", body: section.objective || section.title };
+    const generatedPrompt = mode === "mastery"
+      ? `Trong section ${section.title}, người học cần vận dụng ${concept.title} như thế nào?`
+      : mode === "final"
+        ? `Khi áp dụng ${concept.title} của section ${section.title} vào bài toán thực tế, lựa chọn nào phù hợp nhất?`
+        : `Trong nội dung ${section.title}, phát biểu nào mô tả đúng ${concept.title}?`;
+    const generatedCorrect = String(concept.body || section.objective || section.title).slice(0, 220);
+    const options = Array.isArray(question.options) && question.options.length >= 4
+      ? question.options.slice(0, 4).map((option) => String(option))
+      : [generatedCorrect, "Không cần xác định mục tiêu của section.", "Chỉ cần chọn model theo tên.", "Không cần dữ liệu để kiểm tra kết quả."];
+    questions.push({
+      id: `${mode}-fallback-${index + 1}`,
+      section_id: section.id,
+      competency_id: section.competency_id || section.competencyId || "ml-foundations",
+      label: question.label || assessmentLabel(mode),
+      prompt: question.prompt || `${generatedPrompt} (góc kiểm tra ${index + 1})`,
+      options,
+      correct_index: Number.isInteger(question.correct_index) ? question.correct_index : Number.isInteger(question.correctIndex) ? question.correctIndex : 0,
+      explanation: question.explanation || `Câu hỏi được tạo từ mục tiêu và nội dung của section ${section.title}.`,
+      source_ids: sourceIds,
+    });
+  };
+  for (let index = 0; index < desired; index += 1) {
+    const section = inputSections[index % Math.max(1, inputSections.length)] || sections[index % sections.length];
+    addQuestion(sourceQuestions[index % Math.max(1, sourceQuestions.length)] || {}, section, index);
+  }
+  return { status: "fallback", mode, question_count: questions.length, questions };
 };
 
 const parseModel = (value) => JSON.parse(String(value).trim().replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
@@ -215,14 +398,15 @@ const fetchJson = async (url, options) => {
 };
 
 const callProvider = async (name, route, input) => {
-  const prompt = `Complete this bounded task using the mapped PDF evidence. Return exactly one JSON object matching this schema and field names: ${JSON.stringify(schemas[route])}. Input: ${JSON.stringify(input)}`;
+  const modelInput = route === "assessment" ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== "fallback_questions")) : input;
+  const prompt = `Complete this bounded task using the mapped PDF evidence. Return exactly one JSON object matching this schema and field names: ${JSON.stringify(schemas[route])}. Input: ${JSON.stringify(modelInput)}`;
   if (name === "gemini") {
     const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     const response = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor(name))}:generateContent`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemPrompt(route, input) }] },
+        systemInstruction: { parts: [{ text: systemPrompt(route, modelInput) }] },
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: schemas[route] },
       }),
@@ -238,7 +422,7 @@ const callProvider = async (name, route, input) => {
       ...(process.env.OPENROUTER_HTTP_REFERER ? { "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER } : {}),
       ...(process.env.OPENROUTER_TITLE ? { "X-Title": process.env.OPENROUTER_TITLE } : {}),
     },
-    body: JSON.stringify({ model: modelFor(name), messages: [{ role: "system", content: systemPrompt(route, input) }, { role: "user", content: prompt }], temperature: 0.2, max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS || 800), response_format: { type: "json_object" } }),
+    body: JSON.stringify({ model: modelFor(name), messages: [{ role: "system", content: systemPrompt(route, modelInput) }, { role: "user", content: prompt }], temperature: 0.2, max_tokens: route === "assessment" ? Number(process.env.ASSESSMENT_MAX_TOKENS || 5000) : Number(process.env.OPENROUTER_MAX_TOKENS || 800), response_format: { type: "json_object" } }),
   });
   const rawResponse = response.choices?.[0]?.message?.content || "";
   return { data: parseModel(rawResponse), prompt, rawResponse };
@@ -254,12 +438,41 @@ const safeAnalysis = (data) => ({
 });
 const safeTutor = (data) => ({ ...data, confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)), source_ids: validSources(data.source_ids) });
 const safeRemediation = (data) => ({ ...data, confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)), source_ids: validSources(data.source_ids), micro_tasks: Array.isArray(data.micro_tasks) ? data.micro_tasks.slice(0, 4) : [] });
+const safeAssessment = (data, input) => {
+  const inputSections = Array.isArray(input.sections) ? input.sections : [];
+  const sectionMap = new Map(inputSections.filter((section) => section?.id).map((section) => [section.id, section]));
+  const seen = new Set();
+  const questions = (Array.isArray(data.questions) ? data.questions : []).map((question, index) => {
+    const section = sectionMap.get(question.section_id) || inputSections[index % Math.max(1, inputSections.length)] || sections[index % sections.length];
+    if (!section) return null;
+    const options = Array.isArray(question.options) ? question.options.map((option) => String(option || "").trim()).filter(Boolean).slice(0, 4) : [];
+    const prompt = String(question.prompt || "").trim();
+    const sourceIds = validSources(question.source_ids).filter((id) => !(section.source_ids || section.sourceIds) || (section.source_ids || section.sourceIds).includes(id));
+    const correctIndex = Number(question.correct_index);
+    const promptKey = normalise(prompt);
+    if (!prompt || options.length !== 4 || !Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3 || !sourceIds.length || seen.has(promptKey)) return null;
+    seen.add(promptKey);
+    return {
+      id: String(question.id || `${input.mode || "assessment"}-${index + 1}`),
+      section_id: section.id,
+      competency_id: competencyIds.has(section.competency_id || section.competencyId || question.competency_id) ? (section.competency_id || section.competencyId || question.competency_id) : "ml-foundations",
+      label: String(question.label || assessmentLabel(input.mode)).slice(0, 80),
+      prompt: prompt.slice(0, 500),
+      options,
+      correct_index: correctIndex,
+      explanation: String(question.explanation || "").trim().slice(0, 600),
+      source_ids: sourceIds,
+    };
+  }).filter(Boolean).slice(0, assessmentCount(input));
+  return { status: data.status || "ok", mode: input.mode || "diagnostic", question_count: questions.length, questions };
+};
 
-const validateProviderResult = (route, data) => {
+const validateProviderResult = (route, data, input = {}) => {
   if (!data || typeof data !== "object") throw new Error("provider_invalid_json_object");
   if (route === "analyze" && (!Array.isArray(data.competency_gaps) || !Array.isArray(data.recommended_path) || typeof data.reason !== "string")) throw new Error("provider_invalid_analyze_schema");
   if (route === "tutor" && (typeof data.status !== "string" || typeof data.answer !== "string" || !Array.isArray(data.source_ids))) throw new Error("provider_invalid_tutor_schema");
   if (route === "remediation" && (typeof data.explanation !== "string" || !Array.isArray(data.micro_tasks) || typeof data.transfer_question !== "string" || !Array.isArray(data.source_ids))) throw new Error("provider_invalid_remediation_schema");
+  if (route === "assessment" && (!Array.isArray(data.questions) || data.questions.length < Math.min(3, assessmentCount(input)))) throw new Error("provider_insufficient_assessment_questions");
   return data;
 };
 
@@ -425,6 +638,7 @@ const runLearningPackage = async (input) => {
 };
 
 const fallback = (route, input) => {
+  if (route === "assessment") return fallbackAssessment(input);
   if (route === "tutor") {
     const question = normalise(input.message);
     if (["luong", "bong da", "thoi tiet", "dat ve", "luong"].some((term) => question.includes(term))) return { status: "no_evidence", answer: "Mình chưa có căn cứ trong tài liệu Grokking Machine Learning cho câu hỏi này, nên không nên đoán. Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting, classification hoặc model evaluation.", confidence: 0.08, source_ids: [], handoff: "Đổi câu hỏi về phạm vi tài liệu hoặc hỏi mentor." };
@@ -480,6 +694,13 @@ const runAgent = async (route, input) => {
   if (route === "analyze") data = safeAnalysis(data);
   if (route === "tutor") data = safeTutor(data);
   if (route === "remediation") data = safeRemediation(data);
+  if (route === "assessment") data = safeAssessment(data, input);
+  if (route === "assessment" && data.questions.length < assessmentCount(input)) {
+    data = fallbackAssessment(input);
+    live = false;
+    selectedProvider = null;
+    attempts.push({ provider: "application", reason: "provider_output_did_not_cover_requested_content" });
+  }
   const meta = { request_id: requestId, route, provider: live ? selectedProvider : "deterministic-fallback", model: live ? modelFor(selectedProvider) : null, live, fallback_reason: attempts[attempts.length - 1]?.reason || null, attempts, document_loaded: documentState.loaded, latency_ms: Date.now() - started };
   await writeTrace({
     ...meta,
@@ -503,10 +724,50 @@ const api = async (req, res, url) => {
     providers: { order: providerOrder(), gemini: configured("gemini"), openrouter: configured("openrouter") },
     database: { configured: Boolean(process.env.DATABASE_URL), ready: Boolean(dbPool && !dbInitError), error: dbInitError },
   });
-  if (req.method === "GET" && pathname === "/api/session") {
-    if (!dbPool) return json(res, 200, { enabled: false, state: null });
+  if (pathname === "/api/auth/me" && req.method === "GET") {
     try {
-      const session = await loadSession(url.searchParams.get("session_key"));
+      const user = await authenticatedUser(req);
+      return user ? json(res, 200, { user: publicUser(user) }) : json(res, 401, { error: "unauthorized", message: "Phiên đăng nhập không còn hợp lệ." });
+    } catch (error) {
+      return json(res, 503, { error: "database_unavailable", message: "Không thể kiểm tra phiên đăng nhập.", detail: error.message });
+    }
+  }
+  if (pathname === "/api/auth/register" || pathname === "/api/auth/login" || pathname === "/api/auth/logout") {
+    let input;
+    try { input = await bodyOf(req); } catch (error) { return json(res, 400, { error: error.message }); }
+    try {
+      if (pathname === "/api/auth/logout") {
+        await deleteAuthSession(authTokenFromRequest(req));
+        return json(res, 200, { logged_out: true });
+      }
+      if (req.method !== "POST") return json(res, 405, { error: "method_not_allowed" });
+      const email = normaliseEmail(input.email);
+      const password = String(input.password || "");
+      if (!emailIsValid(email)) return json(res, 400, { error: "invalid_email", message: "Hãy nhập email hợp lệ." });
+      if (!passwordIsValid(password)) return json(res, 400, { error: "invalid_password", message: "Mật khẩu cần có ít nhất 6 ký tự." });
+      if (pathname === "/api/auth/register") {
+        const name = String(input.name || "").trim();
+        if (name.length < 2 || name.length > 80) return json(res, 400, { error: "invalid_name", message: "Tên hiển thị cần có từ 2 đến 80 ký tự." });
+        if (await userByEmail(email)) return json(res, 409, { error: "email_exists", message: "Email này đã được đăng ký." });
+        const user = await createUser({ name, email, password });
+        const session = await saveAuthSession(user.id);
+        return json(res, 201, { user: publicUser(user), access_token: session.token, expires_at: session.expiresAt.toISOString() });
+      }
+      const user = await userByEmail(email);
+      if (!user || !(await verifyPassword(password, user.password_hash))) return json(res, 401, { error: "invalid_credentials", message: "Email hoặc mật khẩu không đúng." });
+      const session = await saveAuthSession(user.id);
+      return json(res, 200, { user: publicUser(user), access_token: session.token, expires_at: session.expiresAt.toISOString() });
+    } catch (error) {
+      if (error.code === "23505") return json(res, 409, { error: "email_exists", message: "Email này đã được đăng ký." });
+      return json(res, 503, { error: "auth_unavailable", message: "Dịch vụ tài khoản tạm thời chưa sẵn sàng.", detail: error.message });
+    }
+  }
+  if (req.method === "GET" && pathname === "/api/session") {
+    const user = await authenticatedUser(req);
+    if (!user) return json(res, 401, { error: "unauthorized", message: "Vui lòng đăng nhập lại." });
+    if (!dbPool || dbInitError) return json(res, 200, { enabled: false, state: null });
+    try {
+      const session = await loadSession(user.id, url.searchParams.get("session_key"));
       return json(res, 200, { enabled: true, state: session?.state || null, updated_at: session?.updated_at || null });
     } catch (error) {
       return json(res, 503, { enabled: true, error: "database_unavailable", detail: error.message });
@@ -516,15 +777,18 @@ const api = async (req, res, url) => {
   let input;
   try { input = await bodyOf(req); } catch (error) { return json(res, 400, { error: error.message }); }
   if (pathname === "/api/session") {
-    if (!dbPool) return json(res, 503, { enabled: false, error: "database_not_configured" });
+    const user = await authenticatedUser(req);
+    if (!user) return json(res, 401, { error: "unauthorized", message: "Vui lòng đăng nhập lại." });
+    if (!dbPool || dbInitError) return json(res, 503, { enabled: false, error: "database_not_configured" });
     try {
-      const saved = await saveSession(input.session_key, input.state);
+      const saved = await saveSession(user.id, input.session_key, input.state);
       return saved ? json(res, 200, { enabled: true, saved: true }) : json(res, 400, { enabled: true, error: "invalid_session" });
     } catch (error) {
       return json(res, 503, { enabled: true, error: "database_unavailable", detail: error.message });
     }
   }
   const route = pathname === "/api/learning/analyze" ? "analyze" : pathname === "/api/tutor" ? "tutor" : pathname === "/api/remediation" ? "remediation" : null;
+  if (pathname === "/api/learning/assessment") return json(res, 200, await runAgent("assessment", input));
   if (pathname === "/api/sources/discover") return json(res, 200, await runSourceDiscovery(input));
   if (pathname === "/api/learning/package") return json(res, 200, await runLearningPackage(input));
   return route ? json(res, 200, await runAgent(route, input)) : json(res, 404, { error: "api_route_not_found" });

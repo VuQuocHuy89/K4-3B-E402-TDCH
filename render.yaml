@@ -10,7 +10,7 @@ services:
       - key: NODE_VERSION
         value: "20"
       - key: AI_PROVIDER
-        value: auto
+        value: openrouter
       - key: DATABASE_URL
         fromDatabase:
           name: pathwise-db
@@ -20,7 +20,7 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
-        value: openai/gpt-4o
+        value: openrouter/free
       - key: AI_TIMEOUT_MS
         value: "12000"
 
