@@ -124,6 +124,7 @@ const officialSources = [
 ];
 
 const allowedDomains = new Set(officialSources.map((source) => source.domain));
+for (const domain of ["docs.langchain.com", "python.langchain.com", "docs.llamaindex.ai", "platform.openai.com", "docs.anthropic.com", "developer.mozilla.org", "learn.microsoft.com", "numpy.org", "pandas.pydata.org"]) allowedDomains.add(domain);
 const normalise = (value) => String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const queryTerms = (value) => normalise(value).split(/[^a-z0-9]+/).filter((term) => term.length > 2);
 
@@ -137,6 +138,7 @@ const discoverCatalogSources = (query, maxResults = 5) => {
       verified: true,
       why_selected: "Nguồn nằm trong allowlist tài liệu chính thống của Pathwise và phù hợp với chủ đề section.",
     }))
+    .filter((source) => source.score > 0)
     .sort((a, b) => b.score - a.score || a.title.localeCompare(b.title))
     .slice(0, maxResults)
     .map(({ score, topics, ...source }) => source);
@@ -146,7 +148,7 @@ const isAllowedUrl = (value) => {
   try {
     const parsed = new URL(value);
     const hostname = parsed.hostname.replace(/^www\./, "");
-    return parsed.protocol === "https:" && (allowedDomains.has(hostname) || hostname === "arxiv.org" || hostname.endsWith(".edu") || hostname.endsWith(".edu.vn"));
+    return parsed.protocol === "https:" && !parsed.username && !parsed.password && (!parsed.port || parsed.port === "443") && (allowedDomains.has(hostname) || hostname === "arxiv.org" || hostname.endsWith(".edu") || hostname.endsWith(".edu.vn"));
   } catch {
     return false;
   }
@@ -154,7 +156,7 @@ const isAllowedUrl = (value) => {
 
 const sanitizeSources = (items, maxResults = 5) => {
   if (!Array.isArray(items)) return [];
-  return items.map((item, index) => ({
+  return items.filter((item) => item && typeof item === "object").map((item, index) => ({
     id: String(item.id || `web-source-${index + 1}`).slice(0, 80),
     title: String(item.title || "Untitled source").slice(0, 180),
     publisher: String(item.publisher || item.domain || "Unknown publisher").slice(0, 100),

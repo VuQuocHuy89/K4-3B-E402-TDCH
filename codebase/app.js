@@ -1,7 +1,9 @@
 (() => {
   "use strict";
 
-  let pack = window.CONTENT_PACK;
+  const seededPack = window.CONTENT_PACK;
+  let catalogPack = seededPack;
+  let pack = seededPack;
   const viewContainer = document.querySelector("#view-container");
   const appShell = document.querySelector("#app-shell");
   const authGate = document.querySelector("#auth-gate");
@@ -12,7 +14,8 @@
   const isValidMinutes = (value) => Number.isInteger(Number(value)) && Number(value) >= 10 && Number(value) <= 240;
   const isValidTopic = (value) => String(value || "").trim().length >= 3 && String(value || "").trim().length <= 120;
   const API_BASE = String(window.PATHWISE_API_BASE || "").trim().replace(/\/+$/, "");
-  const ASSESSMENT_VERSION = 2;
+  const ASSESSMENT_VERSION = 4;
+  let generationEpoch = 0;
   const AUTH_USERS_KEY = "pathwise-auth-users-v1";
   const AUTH_SESSION_KEY = "pathwise-auth-session-v1";
   const AUTH_TOKEN_KEY = "pathwise-auth-token-v1";
@@ -42,11 +45,15 @@
     diagnosticSubmitted: false,
     diagnosticSkipped: false,
     assessmentVersion: ASSESSMENT_VERSION,
+    diagnosticAssessment: null,
+    generationError: null,
+    lessonErrors: {},
     assessmentQuestions: { diagnostic: [], mastery: {}, final: [] },
     assessmentMeta: { diagnostic: null, mastery: {}, final: null },
     aiAnalysis: null,
     agentMeta: null,
     recommendedPath: [],
+    generatedSections: [],
     selectedSectionId: "section-ml-foundations",
     timePlan: 30,
     focusStarted: false,
@@ -77,7 +84,7 @@
     tutorMessages: [
       {
         role: "assistant",
-        text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên Grokking Machine Learning và hiện source ID.",
+        text: "Bạn có thể hỏi về nội dung của chặng đang học. Hãy nêu khái niệm hoặc bài tập cần giải thích thêm.",
         sources: [],
         confidence: "high",
       },
@@ -92,7 +99,7 @@
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
   defaultState.view = "setup";
-  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "diagnosticAssessment", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "generatedSections", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
   const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
   const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
   const learnerName = () => currentUser?.name || pack.learner.name;
@@ -121,13 +128,18 @@
   const clearAuthToken = () => setAuthToken("");
   const readAuthToken = () => { try { return localStorage.getItem(AUTH_TOKEN_KEY) || ""; } catch { return ""; } };
   const authHeaders = (headers = {}) => authToken ? { ...headers, Authorization: `Bearer ${authToken}` } : headers;
+  const apiFetch = async (endpoint, options = {}) => {
+    try { return await fetch(`${API_BASE}${endpoint}`, options); }
+    catch { throw new Error("Không kết nối được backend. Hãy chạy npm start và thử lại."); }
+  };
   const hydrateContentCatalog = async () => {
     if (!API_BASE || !authToken) { contentSource = "static-fallback"; return; }
     try {
-      const response = await fetch(`${API_BASE}/api/content/catalog`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+      const response = await apiFetch("/api/content/catalog", { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok || !payload.content?.topic?.id || !Array.isArray(payload.content.sections)) throw new Error(payload.error || "content_catalog_unavailable");
-      pack = payload.content;
+      catalogPack = payload.content;
+      pack = catalogPack;
       contentSource = "database";
     } catch {
       contentSource = "static-fallback";
@@ -152,9 +164,42 @@
       }
     } catch {}
   };
-  const resetInMemoryState = () => Object.assign(state, cloneData(defaultState));
+  const resetInMemoryState = () => { pack = catalogPack; Object.assign(state, cloneData(defaultState)); };
+  const applyGeneratedSections = (items = []) => {
+    const generated = (Array.isArray(items) ? items : []).filter((item) => item?.id && item.version === ASSESSMENT_VERSION && item.topic_label === state.pathTopic).map((item, index) => ({
+      ...item, number: String(index + 1).padStart(2, "0"),
+      competencyId: item.competency_id, sourceIds: item.source_ids || [],
+      concepts: item.concepts || [], checklist: item.checklist || [], masteryQuestions: [],
+      status: index === 0 ? "current" : "locked",
+    }));
+    const competencyData = state.aiAnalysis?.competencies || state.diagnosticAssessment?.competencies || [];
+    const dynamicCompetencies = competencyData.map((c) => ({
+      ...c, short: c.title, summary: c.objectives.map((o) => o.title).join("; "), description: c.objectives.map((o) => o.title).join("; "),
+      status: state.aiAnalysis?.competency_profile?.[c.id]?.depth === "deep" ? "gap" : "progress",
+      statusLabel: state.aiAnalysis?.competency_profile?.[c.id]?.depth === "deep" ? "Cần củng cố" : state.aiAnalysis?.competency_profile?.[c.id]?.depth === "review" ? "Ôn nhanh" : "Xây nền tảng", color: "indigo",
+      mastery: state.aiAnalysis?.competency_profile?.[c.id]?.score || 0,
+      sourceIds: [], sectionId: generated.find((section) => section.competencyId === c.id)?.id,
+    }));
+    pack = { ...catalogPack, topic: { ...catalogPack.topic, title: state.pathTopic || catalogPack.topic.title,
+        objective: `Học ${state.pathTopic} theo kiến thức hiện có và các mục tiêu của bạn.`,
+        duration: `${generated.reduce((sum, item) => sum + (item.estimated_minutes || 0), 0)} phút nội dung`, documentName: "nguồn tham khảo theo từng chặng" },
+      sources: Object.values(state.generatedPackages || {}).flatMap((lesson) => lesson.sources || []).map((source) => ({ ...source, label: source.title })),
+      sections: generated.length ? generated : catalogPack.sections,
+      competencies: dynamicCompetencies.length ? dynamicCompetencies : catalogPack.competencies };
+    return generated;
+  };
   const resetAssessmentState = () => {
     state.assessmentVersion = ASSESSMENT_VERSION;
+    state.diagnosticAssessment = null;
+    state.generatedPackages = {};
+    state.discoveredSources = {};
+    state.studySlideIndices = {};
+    state.completedSections = {};
+    state.studyChecks = [];
+    state.studyCompleted = false;
+    state.masteryPassed = false;
+    state.lessonErrors = {};
+    state.generationError = null;
     state.assessmentQuestions = { diagnostic: [], mastery: {}, final: [] };
     state.assessmentMeta = { diagnostic: null, mastery: {}, final: null };
     state.diagnosticIndex = 0;
@@ -165,12 +210,17 @@
     state.masteryIndex = 0;
     state.masteryAnswers = {};
     state.masterySubmitted = false;
+    state.finalStarted = false;
+    state.studyContentLoading = "";
+    state.remediationData = null;
     state.finalIndex = 0;
     state.finalAnswers = {};
     state.finalSubmitted = false;
     state.aiAnalysis = null;
     state.agentMeta = null;
     state.recommendedPath = [];
+    state.generatedSections = [];
+    pack = catalogPack;
   };
   const persistState = () => {
     try {
@@ -180,7 +230,7 @@
         window.clearTimeout(cloudSaveTimer);
         const sessionKey = cloudSessionKey;
         cloudSaveTimer = window.setTimeout(() => {
-          fetch(`${API_BASE}/api/session`, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ session_key: sessionKey, state: snapshot }) }).catch(() => {});
+          apiFetch("/api/session", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify({ session_key: sessionKey, state: snapshot }) }).catch(() => {});
         }, 600);
       }
     } catch {}
@@ -191,7 +241,7 @@
       const saved = JSON.parse(localStorage.getItem(stateStorageKey()) || "null");
       if (!saved || typeof saved !== "object") return;
       persistableState.forEach((key) => { if (saved[key] !== undefined) state[key] = saved[key]; });
-      if (saved.assessmentVersion !== ASSESSMENT_VERSION) resetAssessmentState();
+      if (saved.assessmentVersion !== ASSESSMENT_VERSION) { resetAssessmentState(); state.profileConfigured = false; state.view = "setup"; }
       if (!state.assessmentQuestions || typeof state.assessmentQuestions !== "object") state.assessmentQuestions = { diagnostic: [], mastery: {}, final: [] };
       if (!Array.isArray(state.assessmentQuestions.diagnostic)) state.assessmentQuestions.diagnostic = [];
       if (!state.assessmentQuestions.mastery || typeof state.assessmentQuestions.mastery !== "object") state.assessmentQuestions.mastery = {};
@@ -199,13 +249,15 @@
       if (!state.assessmentMeta || typeof state.assessmentMeta !== "object") state.assessmentMeta = { mastery: {} };
       if (!state.assessmentMeta.mastery || typeof state.assessmentMeta.mastery !== "object") state.assessmentMeta.mastery = {};
       if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
+      if (!Array.isArray(state.generatedSections)) state.generatedSections = [];
+      applyGeneratedSections(state.generatedSections);
       state.studyContentLoading = "";
       if (!pack.sections.some((section) => section.id === state.selectedSectionId)) state.selectedSectionId = pack.sections[0].id;
       // Migrate sessions that used the removed option to the diagnostic flow.
       if (state.pathLevel === "intermediate") state.pathLevel = "beginner";
       if (!["new", "beginner"].includes(state.pathLevel)) state.pathLevel = "new";
       if (!Array.isArray(state.tutorMessages)) state.tutorMessages = [];
-      if (["diagnostic-loading", "assessment-loading", "mastery-loading", "remediation-loading"].includes(state.view)) state.view = "overview";
+      if (["diagnostic-loading", "assessment-loading", "diagnostic-generating", "mastery-loading", "remediation-loading", "generation-error"].includes(state.view)) state.view = "overview";
       if (!state.profileConfigured) state.view = "setup";
     } catch {}
   };
@@ -276,7 +328,8 @@
       `<circle cx="40" cy="40" r="27" fill="#fff" stroke="${tone}" stroke-width="4"/><circle cx="40" cy="40" r="17" fill="none" stroke="${tone}" stroke-width="3" stroke-dasharray="5 5"/><path d="M40 40 58 26" stroke="${mint}" stroke-width="4" stroke-linecap="round"/><circle cx="40" cy="40" r="5" fill="${accent}"/>`,
       `<path d="M44 13c13 5 20 17 20 31L48 60 30 42c1-14 6-24 14-29Z" fill="#fff" stroke="${tone}" stroke-width="4" stroke-linejoin="round"/><circle cx="47" cy="32" r="6" fill="${accent}" stroke="${tone}" stroke-width="3"/><path d="m31 43-11 4 9 9 2-13Zm16 17-4 11-9-9 13-2Z" fill="${mint}" stroke="${tone}" stroke-width="3" stroke-linejoin="round"/>`,
     ];
-    return `<svg class="reward-art" width="80" height="80" viewBox="0 0 80 80" role="img" aria-label="${escapeHtml(journeyRewards[index].name)}"><circle cx="40" cy="40" r="38" fill="${unlocked ? "#EEF2FF" : "#F1F5F9"}"/>${drawings[index]}</svg>`;
+    const reward = journeyRewards[index] || { name: "Bước tiến", note: "Nguồn và thực hành theo mục tiêu" };
+    return `<svg class="reward-art" width="80" height="80" viewBox="0 0 80 80" role="img" aria-label="${escapeHtml(reward.name)}"><circle cx="40" cy="40" r="38" fill="${unlocked ? "#EEF2FF" : "#F1F5F9"}"/>${drawings[index] || drawings[drawings.length - 1]}</svg>`;
   };
 
   const animeAvatar = () => `<svg width="74" height="106" viewBox="0 0 74 106" role="img" aria-label="Nhân vật đại diện của bạn">
@@ -303,17 +356,22 @@
   const getSource = (id) => pack.sources.find((source) => source.id === id);
   const activeTopicTitle = () => state.pathTopic || pack.topic.title;
   const topicProgress = () => Math.round((pack.sections.filter((section) => state.completedSections[section.id]).length / pack.sections.length) * 100);
-  const activeDiagnosticQuestions = () => state.assessmentQuestions?.diagnostic?.length ? state.assessmentQuestions.diagnostic : pack.diagnosticQuestions;
-  const activeMasteryQuestions = () => state.assessmentQuestions?.mastery?.[state.selectedSectionId]?.length ? state.assessmentQuestions.mastery[state.selectedSectionId] : getSection().masteryQuestions || pack.masteryQuestions || [];
-  const activeFinalQuestions = () => state.assessmentQuestions?.final?.length ? state.assessmentQuestions.final : pack.finalQuestions;
+  const activeDiagnosticQuestions = () => state.assessmentQuestions?.diagnostic || [];
+  const activeMasteryQuestions = () => state.assessmentQuestions?.mastery?.[state.selectedSectionId] || [];
+  const activeFinalQuestions = () => state.assessmentQuestions?.final || [];
   const plannedAssessmentCount = (mode, sectionId = state.selectedSectionId) => {
-    if (mode === "mastery") return Math.max(3, Math.min(8, ((getSection(sectionId).concepts || []).length || (getSection(sectionId).checklist || []).length || 2) * 2));
-    const perSection = 2;
-    return Math.max(mode === "final" ? 6 : 4, Math.min(mode === "final" ? 24 : 20, pack.sections.length * perSection));
+    if (mode === "mastery") return getSection(sectionId).mastery_question_count || 0;
+    if (mode === "diagnostic") return activeDiagnosticQuestions().length;
+    return pack.sections.reduce((sum, section) => sum + (section.objectives?.length || 0), 0);
+  };
+  const hasCurrentLesson = (section) => {
+    const lesson = state.generatedPackages[section.id];
+    return lesson?.version === ASSESSMENT_VERSION && lesson.topic_label === state.pathTopic &&
+      lesson.section_id === section.id && lesson.context_key === section.context_key && lesson.slides?.length;
   };
   const assessmentStatus = (mode) => {
     const meta = mode === "mastery" ? state.assessmentMeta?.mastery?.[state.selectedSectionId] : state.assessmentMeta?.[mode];
-    return meta?.live ? "AI sinh câu hỏi" : meta ? "Fallback theo nội dung" : "Câu hỏi đang chuẩn bị";
+    return meta?.live ? "AI sinh câu hỏi" : meta ? "Chưa tạo được câu hỏi" : "Câu hỏi đang chuẩn bị";
   };
   const nextRecommendedSection = () => {
     const recommendedIds = (state.aiAnalysis?.recommended_path || state.recommendedPath || []).map((step) => step.section_id);
@@ -328,6 +386,7 @@
   const externalSourceLinks = (urls = []) => urls.map((url) => `<a class="source-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(new URL(url).hostname.replace(/^www\./, ""))} ${icon("arrow")}</a>`).join("");
   const statusBadge = (label, type = "neutral") => `<span class="status-badge status-${type}"><span class="status-badge-dot"></span>${escapeHtml(label)}</span>`;
   const roadmapReferenceLink = (label = "Mở AI Engineer roadmap") => {
+    if (state.generatedSections?.length || state.diagnosticAssessment) return "";
     const reference = pack.topic.roadmapRef || { label: "AI Engineer Roadmap · roadmap.sh", url: "https://roadmap.sh/ai-engineer" };
     return `<a class="roadmap-reference-link" href="${escapeHtml(reference.url)}" target="_blank" rel="noreferrer noopener">${icon("route")} ${escapeHtml(label)} ${icon("arrow")}</a>`;
   };
@@ -361,6 +420,7 @@
   };
 
   const showAppForUser = async (user, token = "") => {
+    generationEpoch += 1;
     currentUser = user;
     if (token) setAuthToken(token);
     cloudSessionKey = `pathwise-cloud-user-${user.id}`;
@@ -378,9 +438,10 @@
   };
 
   const logout = () => {
+    generationEpoch += 1;
     persistState();
     window.clearTimeout(cloudSaveTimer);
-    if (API_BASE && authToken) fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: "{}" }).catch(() => {});
+    if (API_BASE && authToken) apiFetch("/api/auth/logout", { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: "{}" }).catch(() => {});
     currentUser = null;
     cloudSessionKey = "";
     cloudHydrated = !API_BASE;
@@ -446,14 +507,14 @@
   };
 
   const authRequest = async (endpoint, payload) => {
-    const response = await fetch(`${API_BASE}${endpoint}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+    const response = await apiFetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.message || "Không thể kết nối đến backend.");
     return result;
   };
 
   const apiRequest = async (endpoint, payload) => {
-    const response = await fetch(`${API_BASE}${endpoint}`, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(payload) });
+    const response = await apiFetch(endpoint, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: JSON.stringify(payload) });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) {
       if (response.status === 401) { clearAuthToken(); clearAuthSession(); currentUser = null; showAuth("login", "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.", true); }
@@ -462,21 +523,9 @@
     return result;
   };
 
-  const assessmentSections = () => pack.sections.map((section) => ({
-    id: section.id,
-    title: section.title,
-    competency_id: section.competencyId,
-    objective: section.objective,
-    concepts: (section.concepts || []).map((concept) => ({ title: concept.title, body: concept.body })),
-    checklist: section.checklist || [],
-    source_ids: section.sourceIds || [],
+  const assessmentSections = () => state.generatedSections.map((section) => ({
+    ...section, competency_id: section.competency_id || section.competencyId,
   }));
-
-  const fallbackQuestionsFor = (mode, sectionId = state.selectedSectionId) => {
-    if (mode === "diagnostic") return pack.diagnosticQuestions;
-    if (mode === "mastery") return getSection(sectionId).masteryQuestions || [];
-    return pack.finalQuestions;
-  };
 
   const assessmentSeed = (value) => [...String(value || "")].reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0, 2166136261);
   const shuffleAssessmentQuestion = (question) => {
@@ -506,42 +555,41 @@
   }));
 
   const loadAssessment = async (mode, sectionId = state.selectedSectionId) => {
-    const loadingView = mode === "diagnostic" ? "diagnostic-loading" : mode === "mastery" ? "mastery-loading" : "assessment-loading";
+    const epoch = generationEpoch;
     const targetView = mode === "diagnostic" ? "diagnostic" : mode === "mastery" ? "mastery" : "assessment";
-    state.view = loadingView;
+    state.generationError = null;
+    state.view = mode === "diagnostic" ? "diagnostic-generating" : mode === "mastery" ? "mastery-loading" : "assessment-loading";
     render();
-    const fallbackQuestions = normalizeAssessmentQuestions(fallbackQuestionsFor(mode, sectionId));
     try {
+      const relevantSections = mode === "diagnostic" ? [] : assessmentSections().filter((section) => mode === "final" || section.id === sectionId);
+      const packages = Object.fromEntries(relevantSections.map((section) => [section.id, state.generatedPackages[section.id]]));
+      const previous = mode === "mastery" ? state.assessmentQuestions.mastery[sectionId] || [] : mode === "final" ? activeFinalQuestions() : activeDiagnosticQuestions();
       const response = await apiRequest("/api/learning/assessment", {
-        mode,
-        topic_id: pack.topic.id,
-        topic_label: state.pathTopic || pack.topic.title,
-        topic_objective: pack.topic.objective,
-        section_id: sectionId,
-        learner_level: state.pathLevel,
-        available_time_minutes: state.timePlan,
-        sections: assessmentSections(),
-        fallback_questions: fallbackQuestions,
+        mode, topic_label: state.pathTopic, section_id: sectionId,
+        learner_level: state.pathLevel, available_time_minutes: state.timePlan,
+        sections: relevantSections, packages, previous_questions: previous,
       });
+      if (epoch !== generationEpoch) return;
       const questions = normalizeAssessmentQuestions(response.data?.questions || []);
-      if (!questions.length) throw new Error("assessment_empty");
-      if (mode === "diagnostic") state.assessmentQuestions.diagnostic = questions;
+      if (!response.meta?.live || response.data?.version !== ASSESSMENT_VERSION || response.data.topic_label !== state.pathTopic || !questions.length) throw new Error("Chưa nhận được bài test hợp lệ cho chủ đề này.");
+      if (mode === "diagnostic") {
+        state.diagnosticAssessment = response.data;
+        state.assessmentQuestions.diagnostic = questions;
+        applyGeneratedSections(state.generatedSections);
+      }
       if (mode === "mastery") state.assessmentQuestions.mastery[sectionId] = questions;
       if (mode === "final") state.assessmentQuestions.final = questions;
       if (mode === "mastery") state.assessmentMeta.mastery[sectionId] = response.meta;
       else state.assessmentMeta[mode] = response.meta;
-    } catch {
-      if (mode === "diagnostic") state.assessmentQuestions.diagnostic = fallbackQuestions;
-      if (mode === "mastery") state.assessmentQuestions.mastery[sectionId] = fallbackQuestions;
-      if (mode === "final") state.assessmentQuestions.final = fallbackQuestions;
-      const fallbackMeta = { live: false, provider: "content-fallback", fallback_reason: "assessment_backend_unavailable" };
-      if (mode === "mastery") state.assessmentMeta.mastery[sectionId] = fallbackMeta;
-      else state.assessmentMeta[mode] = fallbackMeta;
+      state.diagnosticIndex = mode === "diagnostic" ? 0 : state.diagnosticIndex;
+      state.masteryIndex = mode === "mastery" ? 0 : state.masteryIndex;
+      state.finalIndex = mode === "final" ? 0 : state.finalIndex;
+      state.view = targetView;
+    } catch (error) {
+      if (epoch !== generationEpoch || !currentUser) return;
+      state.generationError = { kind: "assessment", mode, sectionId, message: error.message };
+      state.view = "generation-error";
     }
-    state.diagnosticIndex = mode === "diagnostic" ? 0 : state.diagnosticIndex;
-    state.masteryIndex = mode === "mastery" ? 0 : state.masteryIndex;
-    state.finalIndex = mode === "final" ? 0 : state.finalIndex;
-    state.view = targetView;
     window.history.replaceState(null, "", `#${state.view}`);
     render();
   };
@@ -551,17 +599,18 @@
     const label = badge?.querySelector(".environment-label");
     if (!badge || !label) return;
     try {
-      const response = await fetch(`${API_BASE}/api/health`);
+      const response = await apiFetch("/api/health");
       if (!response.ok) throw new Error("health_unavailable");
       const health = await response.json();
       const databaseReady = Boolean(health.database?.ready && contentSource === "database");
       const documentReady = Boolean(health.document?.loaded);
       documentGroundingReady = documentReady;
-      label.textContent = databaseReady && documentReady ? "Production live" : databaseReady ? "DB live · PDF cần cấu hình" : "Backend fallback";
-      badge.dataset.live = String(databaseReady && documentReady);
-      badge.title = databaseReady && documentReady ? "Nội dung và tiến độ đang lấy từ production backend." : databaseReady ? "Database đã sẵn sàng nhưng tài liệu grounding chưa được nạp." : "Đang dùng fallback; kiểm tra kết nối backend.";
+      const provider = health.providers?.order?.[0];
+      label.textContent = provider ? `AI · ${provider}` : "Chưa cấu hình AI";
+      badge.dataset.live = String(Boolean(provider));
+      badge.title = provider ? "Backend đã kết nối; nội dung AI được kiểm tra ở từng lần tạo." : "Điền API key trong server/.env rồi khởi động lại server.";
     } catch {
-      label.textContent = "Static demo";
+      label.textContent = "Backend chưa kết nối";
       badge.dataset.live = "false";
     }
   };
@@ -570,12 +619,15 @@
     if (!API_BASE || !currentUser || !cloudSessionKey) return;
     const userId = currentUser.id;
     try {
-      const response = await fetch(`${API_BASE}/api/session?session_key=${encodeURIComponent(cloudSessionKey)}`, { headers: authHeaders() });
+      const response = await apiFetch(`/api/session?session_key=${encodeURIComponent(cloudSessionKey)}`, { headers: authHeaders() });
       if (!response.ok) throw new Error("session_unavailable");
       const payload = await response.json();
       if (currentUser?.id === userId && payload.state && typeof payload.state === "object") {
         Object.assign(state, payload.state);
-        if (payload.state.assessmentVersion !== ASSESSMENT_VERSION) resetAssessmentState();
+        if (Array.isArray(state.generatedSections)) applyGeneratedSections(state.generatedSections);
+        if (payload.state.assessmentVersion !== ASSESSMENT_VERSION) { resetAssessmentState(); state.profileConfigured = false; state.view = "setup"; }
+        state.studyContentLoading = ""; state.lessonErrors = {};
+        if (["diagnostic-loading", "assessment-loading", "diagnostic-generating", "mastery-loading", "remediation-loading", "generation-error"].includes(state.view)) state.view = "overview";
       }
     } catch {}
     cloudHydrated = true;
@@ -583,26 +635,6 @@
   };
 
   const confidenceTier = (value) => value >= 0.8 ? "high" : value >= 0.5 ? "medium" : "low";
-
-  const localAnalysis = () => {
-    const gaps = activeDiagnosticQuestions().filter((question) => state.diagnosticAnswers[question.id] !== question.correctIndex);
-    const gapCompetencies = [...new Set(gaps.map((question) => question.competencyId))];
-    const selected = gapCompetencies.length ? gapCompetencies : ["ml-foundations"];
-    const competencyGaps = selected.map((id) => {
-      const competency = getCompetency(id);
-      return { competency_id: id, severity: gapCompetencies.includes(id) ? "high" : "medium", reason: `Ưu tiên ${competency.title} dựa trên tín hiệu diagnostic và prerequisite.`, source_ids: competency.sourceIds };
-    });
-    return { status: "ok", confidence: 0.72, competency_gaps: competencyGaps, recommended_path: selected.map((id) => pack.sections.find((section) => section.competencyId === id)).filter(Boolean).map((section) => ({ section_id: section.id, reason: `Xử lý gap ${section.title} trước khi mở nội dung phụ thuộc.`, estimated_minutes: Number.parseInt(section.duration, 10) || 10 })), next_action: "study", reason: "Đã có đủ tín hiệu tối thiểu để tạo lộ trình local an toàn." };
-  };
-
-  const baselineAnalysis = () => ({
-    status: "baseline",
-    confidence: 0.55,
-    competency_gaps: [{ competency_id: "ml-foundations", severity: "unknown", reason: "Bạn chọn bắt đầu từ số 0 nên hệ thống ưu tiên nền tảng trước khi đánh giá chi tiết.", source_ids: ["GML-CH01"] }],
-    recommended_path: pack.sections.map((section, index) => ({ section_id: section.id, reason: index === 0 ? "Bắt đầu từ nền tảng để tạo ngữ cảnh chung." : `Học sau khi hoàn thành prerequisite của ${pack.sections[index - 1].title}.`, estimated_minutes: Number.parseInt(section.duration, 10) || 10 })),
-    next_action: "study",
-    reason: "Bạn đã chọn bắt đầu từ số 0. Hệ thống bỏ qua bài test đầu vào và dựng roadmap nền tảng theo mục tiêu cùng thời lượng của bạn.",
-  });
 
   const formatFocusTimer = (totalSeconds) => {
     const minutes = Math.floor(totalSeconds / 60);
@@ -710,10 +742,11 @@
         <div class="minutes-field"><label class="field-label" for="path-minutes">Thời gian học mỗi ngày</label><div class="minutes-input-wrap"><input id="path-minutes" name="path_minutes" type="number" min="10" max="240" step="1" inputmode="numeric" value="${state.pathMinutes === "" ? "" : escapeHtml(state.pathMinutes)}" placeholder="Ví dụ: 35" aria-describedby="path-minutes-help path-minutes-error" /><span>phút / ngày</span></div><small id="path-minutes-help">Nhập từ 10 đến 240 phút. Bạn có thể điều chỉnh lại sau.</small><small id="path-minutes-error" class="field-error" ${state.pathMinutes === "" || isValidMinutes(state.pathMinutes) ? "hidden" : ""}>Thời gian phải nằm trong khoảng 10–240 phút.</small></div>
         <div class="setup-footer"><span>${!isValidTopic(state.pathTopic) ? "Nhập một chủ đề để tiếp tục." : !isValidMinutes(state.pathMinutes) ? "Nhập thời gian học để tiếp tục." : state.pathLevel === "new" ? "Sẽ bỏ qua diagnostic và tạo roadmap nền tảng." : "Đã đủ thông tin để vào diagnostic."}</span><button class="primary-button" type="button" data-action="create-path" ${isValidTopic(state.pathTopic) && isValidMinutes(state.pathMinutes) ? "" : "disabled"}>${state.pathLevel === "new" ? "Tạo roadmap nền tảng" : "Bắt đầu diagnostic"} ${icon("arrow")}</button></div>
       </section>
-      <aside class="setup-aside"><div class="setup-preview panel-card"><span class="panel-kicker">SAU KHI THIẾT LẬP</span><h3>Pathwise sẽ làm gì?</h3><div class="setup-preview-row"><span>01</span><p>${state.pathLevel === "new" ? "Dựng roadmap nền tảng từ mục tiêu của bạn" : "Mở diagnostic ngay để đánh giá mức độ bao phủ"}</p></div><div class="setup-preview-row"><span>02</span><p>Ưu tiên competency và section cần học</p></div><div class="setup-preview-row"><span>03</span><p>Đưa nội dung, ví dụ và bài thực hành theo section</p></div><div class="setup-preview-row"><span>04</span><p>Kiểm tra mastery bao quát trước khi mở bước tiếp</p></div></div><div class="setup-note panel-card"><span class="application-icon">${icon("shield")}</span><div><strong>Bạn luôn kiểm soát lộ trình</strong><p>Chủ đề do bạn nhập. Nội dung demo hiện có được map đầy đủ cho Machine Learning; chủ đề khác được giữ làm mục tiêu để mở rộng nội dung.</p></div></div></aside>
+      <aside class="setup-aside"><div class="setup-preview panel-card"><span class="panel-kicker">SAU KHI THIẾT LẬP</span><h3>Pathwise sẽ làm gì?</h3><div class="setup-preview-row"><span>01</span><p>${state.pathLevel === "new" ? "Dựng roadmap nền tảng từ mục tiêu của bạn" : "Mở diagnostic ngay để đánh giá mức độ bao phủ"}</p></div><div class="setup-preview-row"><span>02</span><p>Ưu tiên competency và section cần học</p></div><div class="setup-preview-row"><span>03</span><p>Đưa nội dung, ví dụ và bài thực hành theo section</p></div><div class="setup-preview-row"><span>04</span><p>Kiểm tra mastery bao quát trước khi mở bước tiếp</p></div></div><div class="setup-note panel-card"><span class="application-icon">${icon("shield")}</span><div><strong>Bạn luôn kiểm soát lộ trình</strong><p>Chủ đề và bài làm của bạn quyết định nội dung: học sâu phần còn yếu, ôn ngắn phần đã vững.</p></div></div></aside>
     </div>`;
 
   const renderOverview = () => {
+    if (!state.generatedSections?.length) return renderRoadmap();
     const firstSection = getSection();
     const diagnosticDone = state.diagnosticSubmitted || state.diagnosticSkipped;
     const nextTitle = diagnosticDone ? firstSection.title : "Làm diagnostic đầu vào";
@@ -721,11 +754,11 @@
     const nextAction = diagnosticDone ? "Tiếp tục section" : "Bắt đầu diagnostic";
     const nextActionName = diagnosticDone ? "go-study" : "start-diagnostic";
     return `
-      ${pageHeader("LEARNING PATH · AI ENGINEER", `Chào ${escapeHtml(learnerName())}, bắt đầu đúng nền tảng.`, `Mục tiêu của bạn: <strong>${escapeHtml(activeTopicTitle())}</strong>. Pathwise dùng mục tiêu, ${state.diagnosticSkipped ? "mức bắt đầu từ số 0" : "diagnostic"} và tài liệu ${escapeHtml(pack.topic.documentName)} để sắp xếp bước học phù hợp.`, `<button class="secondary-button compact-button" type="button" data-action="topic-menu">${icon("route")} Sửa mục tiêu <span class="chevron">⌄</span></button>`)}
+      ${pageHeader("LEARNING PATH", `Chào ${escapeHtml(learnerName())}, bắt đầu đúng nền tảng.`, `Mục tiêu của bạn: <strong>${escapeHtml(activeTopicTitle())}</strong>. Pathwise dùng mục tiêu, ${state.diagnosticSkipped ? "mức bắt đầu từ số 0" : "diagnostic"} và tài liệu ${escapeHtml(pack.topic.documentName)} để sắp xếp bước học phù hợp.`, `<button class="secondary-button compact-button" type="button" data-action="topic-menu">${icon("route")} Sửa mục tiêu <span class="chevron">⌄</span></button>`)}
       <div class="overview-top-grid">
           <article class="mastery-hero panel-card">
           <div class="panel-kicker-row"><span class="panel-kicker">TIẾN ĐỘ CHỦ ĐỀ</span>${statusBadge("Đang học", "success")}</div>
-          <div class="mastery-hero-main"><div class="progress-ring" style="--progress:${topicProgress()}"><div><strong>${topicProgress()}</strong><span>%</span></div></div><div><h2>${escapeHtml(activeTopicTitle())}</h2><p>${pack.topic.objective}</p><div class="inline-meta"><span>${icon("file")} ${pack.competencies.length} competencies mapped</span><span>${icon("clock")} ${pack.topic.duration}</span></div></div></div>
+          <div class="mastery-hero-main"><div class="progress-ring" style="--progress:${topicProgress()}"><div><strong>${topicProgress()}</strong><span>%</span></div></div><div><h2>${escapeHtml(activeTopicTitle())}</h2><p>${escapeHtml(pack.topic.objective)}</p><div class="inline-meta"><span>${icon("file")} ${pack.competencies.length} competencies mapped</span><span>${icon("clock")} ${pack.topic.duration}</span></div></div></div>
           <div class="hero-progress-line"><div><span>Mastery hiện tại</span><strong>${topicProgress()} / 100</strong></div><div class="progress-bar"><i style="width:${topicProgress()}%"></i></div></div>
         </article>
         <article class="next-action-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">NEXT BEST ACTION</span><span class="action-spark">${icon("spark")}</span></div><div class="next-action-number">01</div><h2>${nextTitle}</h2><p>${nextCopy}</p><div class="next-action-footer"><span class="time-label">${icon("clock")} ${diagnosticDone ? firstSection.duration : "5 phút"}</span><button class="primary-button compact-button" type="button" data-action="${nextActionName}">${nextAction} ${icon("arrow")}</button></div></article>
@@ -750,7 +783,7 @@
 
   const diagnosticCoverage = () => {
     const covered = new Set(activeDiagnosticQuestions().filter((question) => state.diagnosticAnswers[question.id] !== undefined).map((question) => question.competencyId));
-    return { covered: covered.size, total: pack.competencies.length };
+    return { covered: covered.size, total: new Set(activeDiagnosticQuestions().map((question) => question.competencyId)).size };
   };
 
   const renderDiagnostic = () => {
@@ -758,6 +791,7 @@
       return `${pageHeader("DIAGNOSTIC · ĐÃ BỎ QUA", "Bạn đang bắt đầu từ nền tảng", "Vì bạn chọn chưa biết gì, Pathwise đi thẳng vào roadmap prerequisite và sẽ kiểm tra mastery sau từng section.", `<button class="outline-button compact-button" type="button" data-view="roadmap">Mở roadmap ${icon("arrow")}</button>`)}<div class="locked-state panel-card"><span class="locked-state-icon">${icon("route")}</span><h2>Roadmap nền tảng đã sẵn sàng</h2><p>Diagnostic đầu vào được bỏ qua để bạn bắt đầu ngay từ section đầu tiên. Bạn vẫn có mastery test và remediation ở mỗi chặng.</p><button class="primary-button" type="button" data-view="roadmap">Xem lộ trình ${icon("arrow")}</button></div>`;
     }
     const questions = activeDiagnosticQuestions();
+    if (!questions.length) return renderGenerationError({ kind: "assessment", mode: "diagnostic", message: "Chưa có bài test theo chủ đề này. Hãy tạo diagnostic để bắt đầu." });
     const question = questions[state.diagnosticIndex] || questions[0];
     const selected = state.diagnosticAnswers[question.id];
     const confidence = state.diagnosticConfidence[question.id];
@@ -772,124 +806,128 @@
     const questions = activeDiagnosticQuestions();
     const answered = questions.filter((question) => state.diagnosticAnswers[question.id] !== undefined);
     const correct = answered.filter((question) => state.diagnosticAnswers[question.id] === question.correctIndex).length;
-    return { answered: answered.length, correct, total: questions.length, percent: Math.round((correct / questions.length) * 100) };
+    return { answered: answered.length, correct, total: questions.length, percent: questions.length ? Math.round((correct / questions.length) * 100) : 0 };
   };
 
   const submitDiagnostic = async (skip = false) => {
-    const questions = activeDiagnosticQuestions();
+    const epoch = generationEpoch;
+    state.generationError = null;
+    state.view = "diagnostic-loading";
+    render();
     const payload = {
-      topic_id: pack.topic.id,
       topic_label: state.pathTopic,
       assessment_mode: skip ? "baseline" : "diagnostic",
-      learner: { name: learnerName(), cohort: pack.learner.cohort, target_role: pack.learner.targetRole, level: state.pathLevel },
+      assessment: skip ? null : state.diagnosticAssessment,
+      learner: { level: state.pathLevel },
       available_time_minutes: state.timePlan,
-      answers: skip ? [] : questions.map((question) => ({
+      answers: skip ? [] : activeDiagnosticQuestions().map((question) => ({
         question_id: question.id,
-        competency_id: question.competencyId,
-        answer_index: state.diagnosticAnswers[question.id],
-        is_correct: state.diagnosticAnswers[question.id] === question.correctIndex,
+        selected_answer: question.options[state.diagnosticAnswers[question.id]],
         confidence: state.diagnosticConfidence[question.id] || "unset",
-        source_ids: question.sourceIds,
       })),
     };
     try {
       const response = await apiRequest("/api/learning/analyze", payload);
-      const baseline = baselineAnalysis();
-      state.aiAnalysis = skip ? { ...baseline, status: response.data?.status || baseline.status } : response.data;
+      if (epoch !== generationEpoch) return;
+      if (!response.meta?.live || response.data?.version !== ASSESSMENT_VERSION || !response.data.recommended_path?.length) throw new Error("Chưa tạo được lộ trình hợp lệ.");
+      state.aiAnalysis = response.data;
       state.agentMeta = response.meta;
-      state.recommendedPath = state.aiAnalysis.recommended_path || [];
-    } catch {
-      state.aiAnalysis = skip ? baselineAnalysis() : localAnalysis();
-      state.agentMeta = { live: false, provider: "local-fallback", fallback_reason: "backend_unavailable" };
-      state.recommendedPath = state.aiAnalysis.recommended_path || [];
+      state.recommendedPath = response.data.recommended_path;
+      state.generatedSections = response.data.recommended_path;
+      state.generatedPackages = {};
+      state.discoveredSources = {};
+      state.lessonErrors = {};
+      state.studySlideIndices = {};
+      state.completedSections = {};
+      state.studyChecks = [];
+      state.studyCompleted = false;
+      state.masterySubmitted = false;
+      state.masteryPassed = false;
+      state.assessmentQuestions.mastery = {};
+      state.assessmentQuestions.final = [];
+      state.finalStarted = false;
+      state.finalSubmitted = false;
+      applyGeneratedSections(state.generatedSections);
+      state.selectedSectionId = pack.sections[0].id;
+      state.diagnosticSubmitted = !skip;
+      state.diagnosticSkipped = skip;
+      state.view = skip ? "roadmap" : "diagnostic-result";
+      showToast(skip ? "Đã tạo roadmap nền tảng theo chủ đề." : "Đã phân tích bài làm: học sâu phần yếu, ôn nhanh phần đã vững.");
+    } catch (error) {
+      if (epoch !== generationEpoch || !currentUser) return;
+      state.generationError = { kind: "analyze", skip, message: error.message };
+      state.view = "generation-error";
     }
-    state.selectedSectionId = nextRecommendedSection().id;
-    state.diagnosticSubmitted = !skip;
-    state.diagnosticSkipped = skip;
-    state.view = skip ? "roadmap" : "diagnostic-result";
     window.history.replaceState(null, "", `#${state.view}`);
     render();
-    showToast(skip ? "Đã tạo roadmap nền tảng từ mục tiêu của bạn." : state.agentMeta?.live ? "Agent đã tạo learning profile có căn cứ." : "Đã tạo learning profile bằng fallback an toàn.");
   };
 
   const renderDiagnosticResult = () => {
     const score = diagnosticScore();
     const questions = activeDiagnosticQuestions();
-    const analysis = state.aiAnalysis || localAnalysis();
+    const analysis = state.aiAnalysis || { competency_gaps: [] };
     const gaps = questions.filter((question) => state.diagnosticAnswers[question.id] !== question.correctIndex);
     const nextSection = nextRecommendedSection();
     const agentStatus = state.agentMeta?.live ? statusBadge("AI agent live", "success") : statusBadge("Fallback an toàn", "neutral");
     return `
       ${pageHeader("DIAGNOSTIC · KẾT QUẢ", "Đây là điểm bắt đầu của lộ trình", "Kết quả được dùng để chọn thứ tự section. Bạn chưa cần học lại phần đã nắm được.", `<button class="outline-button compact-button" type="button" data-action="redo-diagnostic">Làm lại</button>`)}
-      <div class="diagnostic-result-grid"><article class="score-card panel-card"><div class="score-card-top"><div class="score-circle"><strong>${score.percent}</strong><span>%</span></div><div><span class="panel-kicker">INITIAL SIGNAL</span><h2>${score.percent >= 80 ? "Nền tảng đang khá chắc" : "Đã tìm thấy điểm cần ưu tiên"}</h2><p>${score.correct}/${score.total} câu đúng · confidence được thu thập theo từng câu.</p></div></div><div class="result-meter"><div class="progress-bar"><i style="width:${score.percent}%"></i></div><span>Diagnostic không phải mastery test</span></div></article><article class="profile-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">LEARNING PROFILE</span>${agentStatus}</div><h2>Ưu tiên theo gap</h2><p>${escapeHtml(analysis.reason || (gaps.length ? `Hệ thống đưa ${gaps.length} tín hiệu cần ôn lên trước.` : "Bạn có thể đi thẳng tới section tiếp theo."))}</p><div class="profile-tags">${analysis.competency_gaps.slice(0, 3).map((gap) => `<span>${escapeHtml(getCompetency(gap.competency_id).title)}</span>`).join("")}</div>${roadmapReferenceLink("Đối chiếu với AI Engineer roadmap")}</article></div>
+      <div class="diagnostic-result-grid"><article class="score-card panel-card"><div class="score-card-top"><div class="score-circle"><strong>${score.percent}</strong><span>%</span></div><div><span class="panel-kicker">INITIAL SIGNAL</span><h2>${score.percent >= 80 ? "Nền tảng đang khá chắc" : "Đã tìm thấy điểm cần ưu tiên"}</h2><p>${score.correct}/${score.total} câu đúng · confidence được thu thập theo từng câu.</p></div></div><div class="result-meter"><div class="progress-bar"><i style="width:${score.percent}%"></i></div><span>Diagnostic không phải mastery test</span></div></article><article class="profile-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">LEARNING PROFILE</span>${agentStatus}</div><h2>Ưu tiên theo gap</h2><p>${escapeHtml(analysis.reason || (gaps.length ? `Hệ thống đưa ${gaps.length} tín hiệu cần ôn lên trước.` : "Bạn có thể đi thẳng tới section tiếp theo."))}</p><div class="profile-tags">${(analysis.competency_gaps || []).slice(0, 3).map((gap) => `<span>${escapeHtml(gap.label || getCompetency(gap.competency_id).title)}</span>`).join("")}</div>${roadmapReferenceLink("Đối chiếu với AI Engineer roadmap")}</article></div>
       <div class="section-heading result-heading"><div><p class="section-eyebrow">WHAT WE FOUND</p><h2>Tín hiệu từ bài làm</h2></div><span class="muted-label">Source-linked · ${gaps.length} gap cần xử lý</span></div>
       <div class="finding-list">${questions.map((question, index) => { const isCorrect = state.diagnosticAnswers[question.id] === question.correctIndex; return `<article class="finding-item"><span class="finding-number ${isCorrect ? "is-good" : "is-gap"}">${isCorrect ? icon("check") : String(index + 1).padStart(2, "0")}</span><div><div class="finding-title"><strong>${escapeHtml(question.label)}</strong>${statusBadge(isCorrect ? "Đã nắm tín hiệu" : "Cần ôn", isCorrect ? "success" : "warning")}</div><p>${isCorrect ? "Câu trả lời đang phù hợp với competency. Không đưa vào phần ưu tiên đầu tiên." : escapeHtml(question.explanation)}</p><div class="source-row-inline">${sourceChips(question.sourceIds)}</div></div></article>`; }).join("")}</div>
       <div class="result-cta panel-card"><div><span class="panel-kicker">NEXT BEST ACTION</span><h2>Đi vào lộ trình cá nhân</h2><p>Ưu tiên kế tiếp: ${escapeHtml(nextSection.title)}. Mỗi section có mastery test riêng với ngưỡng pass 80%.</p></div><button class="primary-button" type="button" data-view="roadmap">Xem roadmap ${icon("arrow")}</button></div>`;
   };
 
   const renderRoadmap = () => {
+    if (!state.generatedSections.length) {
+      const baseline = state.pathLevel === "new";
+      const answered = activeDiagnosticQuestions().length > 0 && activeDiagnosticQuestions().every((q) => state.diagnosticAnswers[q.id] !== undefined);
+      return renderGenerationError({ kind: baseline || answered ? "analyze" : "assessment", skip: baseline, mode: "diagnostic", message: baseline || answered ? "Tiếp tục tạo lộ trình từ thông tin đã lưu." : "Hoàn thành bước diagnostic để tạo lộ trình theo chủ đề của bạn." });
+    }
     const completedCount = pack.sections.filter((section) => state.completedSections[section.id]).length;
     const allSectionsComplete = completedCount === pack.sections.length;
     const prioritySection = allSectionsComplete ? pack.sections[pack.sections.length - 1] : nextRecommendedSection();
-    const gapCount = state.diagnosticSkipped ? 0 : (state.aiAnalysis?.competency_gaps?.length || 2);
+    const gapCount = state.diagnosticSkipped ? 0 : (state.aiAnalysis?.competency_gaps?.length || 0);
     const planSource = state.diagnosticSkipped ? `Bạn bắt đầu từ số 0 nên roadmap đi theo prerequisite, không ép bạn làm diagnostic trước.` : state.diagnosticSubmitted ? `Kết quả diagnostic đã được dùng để ưu tiên ${escapeHtml(prioritySection.title)}.` : "Làm diagnostic để tạo lộ trình sát với kiến thức hiện tại.";
     const progress = Math.round((completedCount / pack.sections.length) * 100);
     const avatarStop = journeyStops[Math.min(completedCount, journeyStops.length - 1)];
     const allComplete = completedCount === pack.sections.length;
     const microLabels = ["Nắm khái niệm", "Luyện tình huống", "Vượt mastery test"];
-    const roadmapPath = "M180 100 C180 220 770 220 770 340 S240 470 240 590 S760 720 760 850 S220 980 220 1110 S760 1240 760 1370 C760 1480 500 1480 500 1580";
+    const finishStop = journeyStops[pack.sections.length];
+    const roadHeight = finishStop.y + 80;
+    const roadmapPath = journeyStops.slice(0, pack.sections.length + 1).reduce((path, point, index, points) => {
+      if (!index) return `M${point.x * 10} ${point.y}`;
+      const from = points[index - 1], midY = (from.y + point.y) / 2;
+      return path + ` C${from.x * 10} ${midY} ${point.x * 10} ${midY} ${point.x * 10} ${point.y}`;
+    }, "");
     return `
-    ${pageHeader("LEARNING ROADMAP", "Hành trình AI Engineer của bạn", "Mỗi mastery test là một bước tiến thật. Hoàn thành ba điểm nhỏ để mở phần thưởng ở cột mốc tiếp theo.", `<div class="journey-header-actions"><button class="outline-button compact-button" type="button" data-action="preview-journey">${icon("route")} Xem chuyển động</button><div class="time-plan-control"><label for="time-plan-input">Thời gian hôm nay</label><div class="time-plan-input"><input id="time-plan-input" type="number" min="10" max="240" step="1" inputmode="numeric" value="${escapeHtml(state.timePlan)}" aria-label="Số phút học hôm nay" /><span>phút</span><button type="button" data-action="save-time-plan">Lưu</button></div><small>10–240 phút</small></div></div>`)}
+    ${pageHeader("LEARNING ROADMAP", `Hành trình học ${escapeHtml(activeTopicTitle())}`, "Mỗi mastery test là một bước tiến thật. Hoàn thành ba điểm nhỏ để mở phần thưởng ở cột mốc tiếp theo.", `<div class="journey-header-actions"><button class="outline-button compact-button" type="button" data-action="preview-journey">${icon("route")} Xem chuyển động</button><div class="time-plan-control"><label for="time-plan-input">Thời gian hôm nay</label><div class="time-plan-input"><input id="time-plan-input" type="number" min="10" max="240" step="1" inputmode="numeric" value="${escapeHtml(state.timePlan)}" aria-label="Số phút học hôm nay" /><span>phút</span><button type="button" data-action="save-time-plan">Lưu</button></div><small>10–240 phút</small></div></div>`)}
     <section class="journey-overview" aria-label="Tóm tắt tiến độ">
-      <div class="journey-overview-copy"><span class="summary-label">PERSONALISED QUEST</span><h2>${state.diagnosticSkipped ? "Khởi hành từ nền tảng" : "Đi theo đúng khoảng trống kiến thức"}</h2><p>${planSource}</p></div>
-      <div class="journey-progress" role="progressbar" aria-label="Tiến độ lộ trình" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><div class="journey-progress-ring" style="--journey-progress:${progress}"><strong>${progress}%</strong><span>hoàn thành</span></div></div>
+      <div class="journey-overview-copy"><span class="summary-label">PERSONALISED QUEST</span><h2>${state.diagnosticSkipped ? "Khởi hành từ nền tảng" : "Đi theo đúng khoảng trống kiến thức"}</h2><div class="journey-source-status">${statusBadge(state.agentMeta?.live ? "Lộ trình cá nhân" : "Chờ tạo lộ trình", state.agentMeta?.live ? "success" : "neutral")}</div><p>${planSource}</p></div>
+      <div class="journey-progress" role="progressbar" aria-label="Tiến độ lộ trình" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><div class="journey-progress-ring" style="--journey-progress:${progress};--map-height:${finishStop.y + 300}px;--road-height:${roadHeight}px;--mobile-map-height:${380 + pack.sections.length * 260}px"><strong>${progress}%</strong><span>hoàn thành</span></div></div>
       <dl class="journey-facts"><div><dt>Đã pass</dt><dd>${completedCount}/${pack.sections.length}</dd></div><div><dt>Phiên hôm nay</dt><dd>${state.timePlan} phút</dd></div><div><dt>Mastery gate</dt><dd>80%</dd></div><div><dt>Gap ưu tiên</dt><dd>${gapCount}</dd></div></dl>
     </section>
     <div class="journey-legend" aria-label="Chú thích trạng thái"><span><i class="legend-swatch is-complete">${icon("check")}</i>Đã hoàn thành</span><span><i class="legend-swatch is-current"></i>Đang đứng</span><span><i class="legend-swatch"></i>Chưa đi qua</span></div>
     <section class="journey-map" aria-label="Bản đồ lộ trình học tập" style="--journey-progress:${progress}">
       <div class="journey-sky" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
-      <svg class="journey-road" width="1000" height="1660" viewBox="0 0 1000 1660" preserveAspectRatio="none" aria-hidden="true">
+      <svg class="journey-road" width="1000" height="${roadHeight}" viewBox="0 0 1000 ${roadHeight}" preserveAspectRatio="none" aria-hidden="true">
         <defs><linearGradient id="journey-road-gradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7775EE"/><stop offset=".55" stop-color="#4F46E5"/><stop offset="1" stop-color="#312E81"/></linearGradient></defs>
         <path class="road-shadow" d="${roadmapPath}"/>
         <path class="road-base" d="${roadmapPath}"/>
         <path class="road-center" d="${roadmapPath}"/>
         <path class="road-progress" pathLength="100" d="${roadmapPath}" style="stroke-dasharray:${progress} 100"/>
       </svg>
-      ${journeyMicroStops.map((group, segmentIndex) => group.map((point, pointIndex) => { const isDone = Boolean(state.completedSections[pack.sections[segmentIndex].id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
-      ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[index]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(journeyRewards[index].name)}</strong><small>${escapeHtml(journeyRewards[index].note)}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
-      <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${journeyStops[6].x}%;--point-y:${journeyStops[6].y}px;--mobile-y:1640px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp Machine Learning Foundations</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : "Hoàn thành đủ 6 cột mốc để chạm tới chiếc cúp cuối hành trình."}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
+      ${journeyMicroStops.slice(0, pack.sections.length).map((group, segmentIndex) => group.map((point, pointIndex) => { const section = pack.sections[segmentIndex]; const isDone = Boolean(section && state.completedSections[section.id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
+      ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[index] || journeyStops[journeyStops.length - 2]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; const sourceUrls = Array.isArray(section.source_urls) ? section.source_urls : []; const sourceLinks = sourceUrls.slice(0, 2).map((url) => `<a href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(new URL(url).hostname.replace(/^www\./, ""))}</a>`).join(""); return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(journeyRewards[index]?.name || "Bước tiến")}</strong><small>${escapeHtml(section.objectives?.[0]?.title || "Nguồn và thực hành theo mục tiêu")}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${sourceLinks ? `<div class="checkpoint-sources"><span>${icon("shield")} Nguồn</span>${sourceLinks}</div>` : ""}${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
+      <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${finishStop.x}%;--point-y:${finishStop.y}px;--mobile-y:${80 + pack.sections.length * 260}px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp ${escapeHtml(activeTopicTitle())}</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : `Hoàn thành đủ ${pack.sections.length} cột mốc để chạm tới chiếc cúp cuối hành trình.`}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
       <div class="journey-avatar ${state.roadmapAnimation ? "is-advancing" : ""}" style="--point-x:${avatarStop.x}%;--point-y:${avatarStop.y}px;--mobile-y:${80 + completedCount * 260}px" data-stop="${completedCount}">${animeAvatar()}<span>Bạn đang ở đây</span></div>
     </section>
     <aside class="journey-note"><span class="rationale-icon indigo">${icon("route")}</span><div><strong>Vì sao đi theo thứ tự này?</strong><p>Prerequisite giữ cho mỗi bước vừa sức; mastery test xác nhận bạn thật sự có thể áp dụng trước khi avatar tiến lên. Trạng thái luôn có nhãn và biểu tượng, không chỉ dựa vào màu.</p>${roadmapReferenceLink("Mở tham chiếu AI Engineer")}</div><button class="link-button" type="button" data-view="tutor">Hỏi AI tutor ${icon("arrow")}</button></aside>`;
   };
 
-  const legacySlideDeck = (section, studyPackage) => {
-    const sourceUrls = Array.isArray(studyPackage.source_urls) ? studyPackage.source_urls : [];
-    const concepts = Array.isArray(studyPackage.concepts) && studyPackage.concepts.length ? studyPackage.concepts : (section.concepts || []);
-    const conceptSlides = concepts.slice(0, 3).map((concept, index) => ({
-      id: `legacy-concept-${index + 1}`,
-      type: "concept",
-      title: concept.title,
-      subtitle: `Khái niệm ${String(index + 1).padStart(2, "0")}`,
-      body: concept.body,
-      bullets: ["Nói lại khái niệm bằng một câu", "Liên hệ với input và output", "Chỉ ra quyết định mà nó hỗ trợ"],
-      takeaway: concept.body,
-      source_urls: sourceUrls,
-    }));
-    return [
-      { id: "legacy-orientation", type: "title", title: section.title, subtitle: "Bài học theo format slide", body: section.description || section.objective || "Đi từ khái niệm đến một quyết định có thể kiểm chứng.", bullets: ["Hiểu mục tiêu của section", "Đọc ví dụ trước khi chọn công cụ", "Kết thúc bằng một bước tự kiểm"], takeaway: section.objective || "Hiểu để áp dụng, không chỉ để nhớ.", source_urls: sourceUrls },
-      ...conceptSlides,
-      { id: "legacy-example", type: "example", title: "Đưa vào một bài toán thật", subtitle: "Input → decision → measurement", body: studyPackage.example || `Chọn một bài toán sản phẩm và mô tả ${section.title} ảnh hưởng thế nào đến quyết định triển khai.`, bullets: section.checklist || ["Xác định input", "Nêu output", "Chọn cách đo"], takeaway: "Một ví dụ cụ thể giúp lộ ra giả định còn thiếu.", source_urls: sourceUrls },
-      { id: "legacy-practice", type: "decision", title: "Thử làm ngay", subtitle: "Biến kiến thức thành một quyết định", body: "Hãy viết câu trả lời ngắn như đang gửi cho teammate. Sau đó đối chiếu với checklist và sửa phần còn mơ hồ.", bullets: studyPackage.practice_steps || section.checklist || [], takeaway: "Không có quyết định nào tốt nếu chưa nói rõ cách kiểm chứng.", source_urls: sourceUrls },
-      { id: "legacy-check", type: "checkpoint", title: "Tự kiểm tra", subtitle: "Explain-back trước khi làm mastery", body: studyPackage.transfer_question || `Bạn sẽ áp dụng ${section.title} ở bước nào?`, bullets: ["Nêu định nghĩa", "Cho một ví dụ", "Chọn một cách đo", "Nói một rủi ro"], takeaway: "Nếu bạn giải thích được cho teammate, bạn đã sẵn sàng chuyển sang bài test.", checkpoint: studyPackage.transfer_question || `Bạn sẽ áp dụng ${section.title} ở bước nào?`, source_urls: sourceUrls },
-      { id: "legacy-recap", type: "recap", title: "Chốt section", subtitle: "Hiểu → thử → kiểm chứng", body: "Hoàn thành checklist, sau đó làm mastery test để xác nhận khả năng áp dụng vào tình huống mới.", bullets: ["Nắm khái niệm cốt lõi", "Biết nguồn đọc sâu hơn", "Sẵn sàng làm mastery test"], takeaway: "Học xong khi bạn biết mình đúng ở đâu và cần kiểm chứng gì thêm.", source_urls: sourceUrls },
-    ];
-  };
-
   const slideTypeLabel = (type) => ({ title: "MỞ ĐẦU", concept: "KHÁI NIỆM", process: "KHUNG SUY NGHĨ", example: "VÍ DỤ", pitfall: "DỄ NHẦM", decision: "RA QUYẾT ĐỊNH", checkpoint: "TỰ KIỂM", recap: "TÓM TẮT" }[type] || "LEARNING SLIDE");
 
   const renderSlideDeck = (section, studyPackage, sourceResult) => {
-    const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
+    const slides = studyPackage.slides || [];
     if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
     const rawIndex = Number(state.studySlideIndices[section.id] || 0);
     const slideIndex = Math.max(0, Math.min(slides.length - 1, rawIndex));
@@ -915,7 +953,8 @@
     if (state.view !== "study") return;
     const section = getSection();
     const studyPackage = state.generatedPackages[section.id] || section;
-    const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
+    const slides = studyPackage.slides || [];
+    if (!slides.length) return;
     if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
     const current = Number(state.studySlideIndices[section.id] || 0);
     state.studySlideIndices[section.id] = Math.max(0, Math.min(slides.length - 1, current + delta));
@@ -932,18 +971,20 @@
   };
 
   const renderStudy = () => {
+    if (!state.generatedSections?.length) return renderRoadmap();
     const generatedMasteryQuestions = state.assessmentQuestions?.mastery?.[state.selectedSectionId] || [];
     const section = { ...getSection(), masteryQuestions: generatedMasteryQuestions.length ? generatedMasteryQuestions : Array.from({ length: plannedAssessmentCount("mastery") }) };
     const index = pack.sections.findIndex((item) => item.id === section.id);
     const status = sectionState(section, index);
     const sourceResult = state.discoveredSources[section.id];
-    const studyPackage = state.generatedPackages[section.id] || section;
-    const hasGeneratedDeck = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6;
+    const studyPackage = hasCurrentLesson(section) ? state.generatedPackages[section.id] : null;
+    const hasGeneratedDeck = Boolean(studyPackage);
     const contentIsPreparing = state.studyContentLoading === section.id;
-    if (API_BASE && authToken && !hasGeneratedDeck && !contentIsPreparing) window.queueMicrotask(() => prepareSectionLearning(section));
+    if (API_BASE && authToken && !hasGeneratedDeck && !contentIsPreparing && !state.lessonErrors[section.id] && status !== "locked") window.queueMicrotask(() => prepareSectionLearning(section));
     if (status === "locked") {
       return `${pageHeader("STUDY SESSION", "Section đang được khóa", "Hoàn thành section trước đó với ít nhất 80% để mở nội dung này.", `<button class="outline-button compact-button" type="button" data-view="roadmap">Về roadmap ${icon("back")}</button>`)}<div class="locked-state panel-card"><span class="locked-state-icon">${icon("shield")}</span><h2>Chưa đến bước này</h2><p>Pathwise giữ thứ tự học theo prerequisite để bạn không phải nhảy qua phần nền tảng.</p><button class="primary-button" type="button" data-action="go-section" data-section-id="${escapeHtml(nextRecommendedSection().id)}">Mở section đang ưu tiên ${icon("arrow")}</button></div>`;
     }
+    if (!hasGeneratedDeck) return `${pageHeader("STUDY SESSION", escapeHtml(section.title), escapeHtml(section.description), "")}<div class="loading-state panel-card"><h2>${state.lessonErrors[section.id] ? "Chưa tạo được bài học" : "Đang chuẩn bị bài học riêng cho section"}</h2><p>${escapeHtml(state.lessonErrors[section.id] || "Đọc nguồn tham khảo, tạo ví dụ và bài tập theo mục tiêu của chặng này.")}</p>${state.lessonErrors[section.id] ? '<button class="primary-button" data-action="retry-lesson">Thử tạo lại bài học</button>' : '<div class="loading-lines"><i></i><i></i><i></i></div>'}<button class="quiet-button" data-view="roadmap">Về lộ trình</button></div>`;
     const checkedCount = state.studyChecks.length;
     return `${pageHeader(`${section.number} · STUDY SESSION`, escapeHtml(section.title), escapeHtml(section.description), `<span class="session-time">${icon("clock")} ${studyPackage.estimated_minutes || Number.parseInt(section.duration, 10)} phút</span>`)}
       <div class="study-progress-row"><div><span>SECTION PROGRESS</span><strong>${state.studyCompleted ? "100" : checkedCount ? "66" : "24"}%</strong></div><div class="progress-bar"><i style="width:${state.studyCompleted ? 100 : checkedCount ? 66 : 24}%"></i></div><span class="study-progress-note">${state.studyCompleted ? "Sẵn sàng làm mastery test" : "Đọc · kiểm tra · áp dụng"}</span></div>
@@ -966,6 +1007,7 @@
       return `${pageHeader("SECTION MASTERY", "Mastery test chưa mở", "Học xong section rồi mới làm test cuối section.", `<button class="outline-button compact-button" type="button" data-view="study">Về study session ${icon("back")}</button>`)}<div class="locked-state panel-card"><span class="locked-state-icon">${icon("book")}</span><h2>Hoàn thành checklist trước</h2><p>Đánh dấu đã học để mở ${activeMasteryQuestions().length} câu hỏi mastery. Mục tiêu của test là chứng minh khả năng áp dụng, không phải nhớ nguyên văn slide.</p><button class="primary-button" type="button" data-view="study">Tiếp tục học ${icon("arrow")}</button></div>`;
     }
     const questions = activeMasteryQuestions();
+    if (!questions.length) return renderGenerationError({ kind: "assessment", mode: "mastery", sectionId: state.selectedSectionId, message: "Hãy tạo bài test cho nội dung section vừa học." });
     const question = questions[state.masteryIndex];
     return `${pageHeader("SECTION MASTERY", "Kiểm tra để mở section tiếp", "Bạn cần đạt ít nhất 80%. Nếu chưa đạt, hệ thống sẽ chỉ ra gap và cho retest sau một vòng remediation.", `<span class="pass-rule"><strong>80%</strong><small>pass mark</small></span>`)}${assessmentQuestion(question, state.masteryIndex, questions.length, "mastery")}`;
   };
@@ -986,41 +1028,28 @@
     return `${pageHeader("SECTION MASTERY · KẾT QUẢ", passed ? "Section đã được mở khóa" : "Cần thêm một vòng remediation", passed ? `Bạn đã chứng minh có thể dùng kiến thức ${escapeHtml(section.title)} trong các câu hỏi mới.` : "Không sao — hệ thống giữ lại đúng phần gap để bạn ôn rồi thử lại.", `<span class="pass-rule ${passed ? "is-passed" : "is-retry"}"><strong>${score.percent}%</strong><small>${passed ? "passed" : "chưa đạt"}</small></span>`)}<div class="mastery-result-card ${passed ? "is-pass" : "is-fail"}><div class="result-symbol">${passed ? icon("check") : icon("refresh")}</div><div><span class="panel-kicker">${passed ? "MASTERY PASSED" : "TARGETED RETEST"}</span><h2>${passed ? "Bạn có thể đi tiếp" : "Gap vẫn còn ở phần ứng dụng"}</h2><p>${passed ? "Section tiếp theo đã sẵn sàng mở. Lộ trình được cập nhật theo tiến độ mới." : "Ôn lại ví dụ, viết explain-back ngắn và làm lại test. Chỉ câu sai mới được đưa vào vòng ôn tiếp theo."}</p></div></div><div class="mastery-score-grid"><div><strong>${score.correct}/${score.total}</strong><span>câu đúng</span></div><div><strong>${score.percent}%</strong><span>kết quả</span></div><div><strong>80%</strong><span>ngưỡng pass</span></div></div><div class="result-cta panel-card"><div><span class="panel-kicker">${passed ? "NEXT STEP" : "RECOVERY PATH"}</span><h2>${passed ? "Tiếp tục lộ trình" : "Ôn lại đúng điểm chưa chắc"}</h2><p>${passed ? "Section tiếp theo được mở trong roadmap. Bạn vẫn có thể quay lại xem lại section này." : "Khi retest đạt 80%, section tiếp theo mới được mở."}</p></div><div>${passed ? `<button class="primary-button" type="button" data-action="next-section">Mở section tiếp theo ${icon("arrow")}</button>` : `<button class="primary-button" type="button" data-action="start-remediation">Mở remediation ${icon("arrow")}</button>`}</div></div>`;
   };
 
-  const localRemediation = () => {
+  const lessonRemediation = () => {
     const section = getSection();
-    const competency = getCompetency(section.competencyId);
+    const failed = activeMasteryQuestions().filter((q) => state.masteryAnswers[q.id] !== q.correctIndex);
+    const lesson = state.generatedPackages[section.id];
     return {
-      status: "ok",
-      explanation: `Ôn lại ${competency.title} bằng định nghĩa, một ví dụ và một quyết định model. Sau đó tự giải thích lại trước khi retest.`,
-      micro_tasks: ["Viết định nghĩa khái niệm bằng một câu.", "Nêu một ví dụ dữ liệu hoặc sản phẩm.", "Chọn một cách kiểm tra model và giải thích lý do."],
-      transfer_question: `Trong một bài toán AI Engineer thực tế, bạn sẽ áp dụng ${competency.title} ở bước nào?`,
-      source_ids: section.sourceIds,
-      confidence: 0.74,
+      explanation: failed.map((q) => `${q.prompt}\nĐáp án đúng: ${q.options[q.correctIndex]}. ${q.explanation}`).join("\n\n"),
+      micro_tasks: failed.map((q) => `Giải lại: ${q.prompt}`),
+      transfer_question: lesson?.transfer_question || "Giải thích lý do chọn đáp án trước khi làm bài mới.",
+      source_ids: [], source_urls: [...new Set(failed.flatMap((q) => q.source_urls || []))],
     };
   };
 
   const renderRemediationLoading = () => `${pageHeader("RECOVERY PATH", "Đang tạo remediation mục tiêu", "Agent đang đọc những câu sai để chọn lại đúng phần cần ôn.", "")}<div class="loading-state panel-card"><div class="loading-orbit">${icon("spark")}</div><h2>Không bắt bạn học lại tất cả</h2><p>Đang tạo một vòng ôn ngắn và một câu transfer mới.</p><div class="loading-lines"><i></i><i></i><i></i></div></div>`;
 
   const renderRemediation = () => {
-    const data = state.remediationData || localRemediation();
+    const data = state.remediationData || lessonRemediation();
     const feedback = state.remediationChecked ? `<div class="remediation-feedback ${state.remediationText.trim().length > 10 ? "is-good" : "is-warning"}">${state.remediationText.trim().length > 10 ? "Đã ghi nhận explain-back. Bạn có thể làm lại mastery test với câu hỏi mới." : "Phần giải thích còn ngắn. Bạn vẫn có thể sửa lại trước khi retest."}</div>` : "";
-    return `${pageHeader("RECOVERY PATH · REMEDIATION", "Ôn đúng phần còn thiếu", "Một vòng ôn ngắn sau khi chưa đạt 80%. Nội dung chỉ tập trung vào section đang bị hổng.", `<span class="pass-rule is-retry"><strong>2–4m</strong><small>đề xuất</small></span>`)}<div class="remediation-grid"><article class="remediation-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">TARGETED EXPLANATION</span>${state.agentMeta?.live ? statusBadge("AI grounded", "success") : statusBadge("Local fallback", "neutral")}</div><h2>${escapeHtml(getSection().title)}</h2><p class="remediation-explanation">${escapeHtml(data.explanation)}</p><div class="source-row-inline">${sourceChips(data.source_ids)}</div><div class="micro-task-list"><span class="content-label">MICRO TASKS</span>${data.micro_tasks.map((task, index) => `<div class="micro-task"><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(task)}</p></div>`).join("")}</div><div class="transfer-callout"><span class="application-icon">${icon("spark")}</span><div><span class="content-label">TRANSFER CHECK</span><h3>${escapeHtml(data.transfer_question)}</h3></div></div></article><aside class="explain-back-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">EXPLAIN-BACK</span><span class="muted-label">Không tính điểm</span></div><h3>Nói lại bằng cách của bạn</h3><p>Viết 1–2 câu để kiểm tra bạn đã hiểu ý chính trước khi retest.</p><label for="remediation-input">Bạn đã hiểu gì?</label><textarea id="remediation-input" placeholder="Overfitting là..., validation dùng để...">${escapeHtml(state.remediationText)}</textarea><button class="secondary-button full-button" type="button" data-action="check-remediation">Kiểm tra explain-back ${icon("check")}</button>${feedback}<button class="primary-button full-button" type="button" data-action="retry-mastery" ${state.remediationChecked ? "" : "disabled"}>Làm lại mastery test ${icon("arrow")}</button></aside></div>`;
+    return `${pageHeader("RECOVERY PATH · REMEDIATION", "Ôn đúng phần còn thiếu", "Một vòng ôn ngắn sau khi chưa đạt 80%. Nội dung chỉ tập trung vào section đang bị hổng.", `<span class="pass-rule is-retry"><strong>2–4m</strong><small>đề xuất</small></span>`)}<div class="remediation-grid"><article class="remediation-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">TARGETED EXPLANATION</span>${statusBadge("Từ bài học và câu đã sai", "info")}</div><h2>${escapeHtml(getSection().title)}</h2><p class="remediation-explanation">${escapeHtml(data.explanation)}</p><div class="source-row-inline">${externalSourceLinks(data.source_urls)}</div><div class="micro-task-list"><span class="content-label">MICRO TASKS</span>${data.micro_tasks.map((task, index) => `<div class="micro-task"><span>${String(index + 1).padStart(2, "0")}</span><p>${escapeHtml(task)}</p></div>`).join("")}</div><div class="transfer-callout"><span class="application-icon">${icon("spark")}</span><div><span class="content-label">TRANSFER CHECK</span><h3>${escapeHtml(data.transfer_question)}</h3></div></div></article><aside class="explain-back-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">EXPLAIN-BACK</span><span class="muted-label">Không tính điểm</span></div><h3>Nói lại bằng cách của bạn</h3><p>Viết 1–2 câu để kiểm tra bạn đã hiểu ý chính trước khi retest.</p><label for="remediation-input">Bạn đã hiểu gì?</label><textarea id="remediation-input" placeholder="Tôi đã nhầm ở..., cách giải đúng là...">${escapeHtml(state.remediationText)}</textarea><button class="secondary-button full-button" type="button" data-action="check-remediation">Kiểm tra explain-back ${icon("check")}</button>${feedback}<button class="primary-button full-button" type="button" data-action="retry-mastery" ${state.remediationChecked ? "" : "disabled"}>Làm lại mastery test ${icon("arrow")}</button></aside></div>`;
   };
 
-  const loadRemediation = async () => {
-    state.remediationLoading = true;
-    state.view = "remediation-loading";
-    render();
-    const questions = activeMasteryQuestions();
-    const failedQuestions = questions.filter((question) => state.masteryAnswers[question.id] !== question.correctIndex).map((question) => ({ id: question.id, prompt: question.prompt, source_ids: question.sourceIds }));
-    try {
-      const response = await apiRequest("/api/remediation", { section_id: state.selectedSectionId, score: state.masteryScore, failed_questions: failedQuestions });
-      state.remediationData = response.data;
-      state.agentMeta = response.meta;
-    } catch {
-      state.remediationData = localRemediation();
-      state.agentMeta = { live: false, provider: "local-fallback", fallback_reason: "backend_unavailable" };
-    }
+  const loadRemediation = () => {
+    state.remediationData = lessonRemediation();
     state.remediationLoading = false;
     state.remediationChecked = false;
     state.remediationText = "";
@@ -1034,6 +1063,7 @@
     const allSectionsDone = pack.sections.every((section) => state.completedSections[section.id]);
     if (!allSectionsDone && !state.finalStarted) return `${pageHeader("ASSESSMENTS", "Final topic assessment chưa mở", "Hoàn thành tất cả section với ít nhất 80% trước khi làm bài test cuối topic.", `<span class="pass-rule"><strong>80%</strong><small>pass mark</small></span>`)}<div class="locked-state panel-card"><span class="locked-state-icon">${icon("shield")}</span><h2>Còn section chưa pass</h2><p>Final assessment sẽ tổng hợp toàn bộ topic. Hãy quay lại roadmap để tiếp tục section đang được ưu tiên.</p><button class="primary-button" type="button" data-view="roadmap">Mở learning roadmap ${icon("arrow")}</button></div>`;
     if (!state.finalStarted) return `${pageHeader("ASSESSMENTS", "Final learning path assessment", `Một bài test tổng hợp sau khi hoàn thành tất cả section của ${escapeHtml(activeTopicTitle())}.`, `<span class="pass-rule"><strong>80%</strong><small>pass mark</small></span>`)}<div class="final-intro-grid"><article class="final-intro panel-card"><div class="final-icon">${icon("shield")}</div><span class="panel-kicker">TOPIC GATE</span><h2>Chứng minh bạn đã nối được các phần</h2><p>${displayQuestionCount} câu hỏi transfer được phân bổ theo ${pack.sections.length} section và sinh lại theo nội dung đã học.</p><div class="final-facts"><span>${icon("file")} ${displayQuestionCount} câu hỏi dự kiến</span><span>${icon("clock")} khoảng ${Math.max(6, Math.round(displayQuestionCount * 1.2))} phút</span><span>${icon("check")} pass từ 80%</span></div><button class="primary-button" type="button" data-action="start-final">Bắt đầu final assessment ${icon("arrow")}</button></article><aside class="coverage-card panel-card"><span class="panel-kicker">COVERAGE MAP</span><h3>Bài test bao phủ</h3>${pack.competencies.map((competency) => `<div class="coverage-row"><span>${escapeHtml(competency.title)}</span><i><b style="width:${Math.max(20, competency.mastery)}%"></b></i><strong>${competency.mastery}%</strong></div>`).join("")}<div class="coverage-note">${icon("spark")} ${escapeHtml(assessmentStatus("final"))}; điểm yếu sẽ được đưa vào lộ trình sau kết quả.</div></aside></div>`;
+    if (state.finalStarted && !questions.length) return renderGenerationError({ kind: "assessment", mode: "final", message: "Hãy tạo bài test tổng hợp nội dung đã học." });
     if (state.finalSubmitted) {
       const score = finalScore();
       return `${pageHeader("ASSESSMENTS · KẾT QUẢ", score.percent >= 80 ? "Learning path đã hoàn thành" : "Cần ôn bổ sung", score.percent >= 80 ? "Bạn đã đạt ngưỡng để chuyển sang topic kế tiếp." : "Các competency chưa chắc sẽ được đưa trở lại roadmap.", `<span class="pass-rule ${score.percent >= 80 ? "is-passed" : "is-retry"}"><strong>${score.percent}%</strong><small>${score.percent >= 80 ? "passed" : "retry"}</small></span>`)}<div class="final-result ${score.percent >= 80 ? "is-pass" : "is-fail"} panel-card"><div class="result-symbol">${score.percent >= 80 ? icon("check") : icon("refresh")}</div><div><span class="panel-kicker">${score.percent >= 80 ? "TOPIC PASSED" : "PERSONALISED RECOVERY"}</span><h2>${score.percent >= 80 ? "Sẵn sàng sang bài tiếp theo" : "Chưa đủ chắc để mở bài mới"}</h2><p>${score.percent >= 80 ? `Kết quả được ghi nhận cho ${escapeHtml(activeTopicTitle())}.` : "Pathwise sẽ ưu tiên lại đúng competency có câu trả lời sai trước khi cho thử lại."}</p></div></div><div class="result-cta panel-card"><div><span class="panel-kicker">NEXT ACTION</span><h2>${score.percent >= 80 ? "Xem lại learning profile" : "Quay lại lộ trình"}</h2><p>${score.percent >= 80 ? "Bạn có thể xem lại evidence và các câu đã làm." : "Roadmap vẫn giữ tiến độ section, không bắt đầu lại toàn bộ."}</p></div><button class="primary-button" type="button" data-view="${score.percent >= 80 ? "overview" : "roadmap"}">${score.percent >= 80 ? "Về tổng quan" : "Mở roadmap"} ${icon("arrow")}</button></div>`;
@@ -1086,7 +1116,7 @@
   const renderAssessmentLoading = () => {
     const isMastery = state.view === "mastery-loading";
     const isFinal = state.view === "assessment-loading";
-    return `${pageHeader(isMastery ? "SECTION MASTERY" : isFinal ? "TOPIC ASSESSMENT" : "DIAGNOSTIC", "Đang sinh bộ câu hỏi theo nội dung", "Hệ thống đang phân bổ câu hỏi theo số section, competency và learning cards thay vì dùng một số lượng cố định.", "")}<div class="loading-state panel-card"><div class="loading-orbit">${icon("spark")}</div><h2>Đang tạo bài test phù hợp...</h2><p>LLM chỉ được dùng nội dung đã map và source ID hợp lệ; nếu provider lỗi, hệ thống chuyển sang fallback theo nội dung.</p><div class="loading-lines"><i></i><i></i><i></i></div></div>`;
+    return `${pageHeader(isMastery ? "SECTION MASTERY" : isFinal ? "TOPIC ASSESSMENT" : "DIAGNOSTIC", "Đang sinh bộ câu hỏi theo nội dung", "Hệ thống đang phân bổ câu hỏi theo số section, competency và learning cards thay vì dùng một số lượng cố định.", "")}<div class="loading-state panel-card"><div class="loading-orbit">${icon("spark")}</div><h2>Đang tạo bài test phù hợp...</h2><p>Số câu được tính từ mục tiêu kiến thức; câu hỏi kiểm tra đúng chủ đề hoặc nội dung section đã học.</p><div class="loading-lines"><i></i><i></i><i></i></div></div>`;
   };
 
   const playRoadmapAnimation = () => {
@@ -1127,7 +1157,7 @@
   const render = () => {
     const viewChanged = Boolean(lastRenderedView) && lastRenderedView !== state.view;
     persistState();
-    const view = ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : ["assessment-loading", "mastery-loading"].includes(state.view) ? renderAssessmentLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
+    const view = state.view === "generation-error" ? () => renderGenerationError(state.generationError) : state.view === "diagnostic-generating" ? renderAssessmentLoading : ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : ["assessment-loading", "mastery-loading"].includes(state.view) ? renderAssessmentLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
     viewContainer.innerHTML = view();
     if (viewChanged) {
       viewContainer.classList.remove("view-enter");
@@ -1136,6 +1166,8 @@
     }
     lastRenderedView = state.view;
     updateAccountUi();
+    const diagnosticBadge = document.querySelector('[data-view="diagnostic"] .nav-count');
+    if (diagnosticBadge) { const count = activeDiagnosticQuestions().length; diagnosticBadge.textContent = String(count); diagnosticBadge.hidden = !count; }
     document.body.classList.toggle("is-onboarding", state.view === "setup");
     const topicSwitcher = document.querySelector(".topic-switcher");
     if (topicSwitcher) {
@@ -1156,7 +1188,10 @@
   };
 
   const reset = () => {
-    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, studyContentLoading: "", studySlideIndices: {}, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
+    generationEpoch += 1;
+    pack = catalogPack;
+    state.lessonErrors = {}; state.generationError = null; state.diagnosticAssessment = null;
+    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], generatedSections: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, studyContentLoading: "", studySlideIndices: {}, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về nội dung của chặng đang học. Hãy nêu khái niệm hoặc bài tập cần giải thích thêm.", sources: [], confidence: "high" }] });
     try { localStorage.removeItem(stateStorageKey()); } catch {}
     window.history.replaceState(null, "", "#setup");
     render();
@@ -1202,75 +1237,57 @@
   };
 
   const discoverSectionSources = async (section) => {
+    const epoch = generationEpoch;
     const response = await apiRequest("/api/sources/discover", {
-      topic_id: pack.topic.id,
-      section_id: section.id,
-      query: `${section.title}. ${section.objective || section.description || "AI Engineer learning section"}`,
+      topic_label: state.pathTopic, section_id: section.id,
+      query: `${state.pathTopic}: ${section.title}. ${section.objective}`,
     });
-    state.discoveredSources[section.id] = response.data;
-    state.agentMeta = response.meta;
+    if (epoch === generationEpoch) state.discoveredSources[section.id] = response.data;
     return response.data;
   };
 
-  const createSectionLearningPackage = async (section, sourceResult) => {
+  const createSectionLearningPackage = async (section) => {
+    const epoch = generationEpoch;
     const response = await apiRequest("/api/learning/package", {
-      topic_id: pack.topic.id,
-      section_id: section.id,
-      level: "beginner-to-intermediate",
-      minutes: state.timePlan,
-      sources: sourceResult.sources,
+      topic_label: state.pathTopic, section_id: section.id, section,
+      neighbor_sections: pack.sections.filter((s) => s.id !== section.id).map((s) => ({ title: s.title, objectives: s.objectives })),
     });
-    state.generatedPackages[section.id] = response.data;
-    state.agentMeta = response.meta;
-    return response.data;
+    if (epoch !== generationEpoch) return null;
+    const lesson = response.data;
+    if (!response.meta?.live || lesson?.version !== ASSESSMENT_VERSION || lesson.section_id !== section.id || lesson.topic_label !== state.pathTopic || lesson.context_key !== section.context_key || !lesson.slides?.length) throw new Error("Bài học trả về không khớp section.");
+    state.generatedPackages[section.id] = lesson;
+    applyGeneratedSections(state.generatedSections);
+    state.discoveredSources[section.id] = { sources: lesson.sources || [], note: "Nội dung được tạo từ văn bản nguồn đã đọc." };
+    state.studySlideIndices[section.id] = 0;
+    delete state.assessmentQuestions.mastery[section.id];
+    delete state.assessmentMeta.mastery[section.id];
+    return lesson;
   };
 
-  const prepareSectionLearning = async (section) => {
-    if (!API_BASE || !authToken || state.generatedPackages[section.id]?.slides?.length >= 6 || state.studyContentLoading === section.id) return;
+  const prepareSectionLearning = async (section, force = false) => {
+    if (!authToken || (hasCurrentLesson(section) && !force) || state.studyContentLoading === section.id) return;
+    const epoch = generationEpoch;
     state.studyContentLoading = section.id;
+    delete state.lessonErrors[section.id];
     render();
-    try {
-      const sourceResult = state.discoveredSources[section.id]?.sources?.length
-        ? state.discoveredSources[section.id]
-        : await discoverSectionSources(section);
-      if (sourceResult?.sources?.length) await createSectionLearningPackage(section, sourceResult);
-    } catch {
-      state.discoveredSources[section.id] = state.discoveredSources[section.id] || { status: "error", sources: [], note: "Không thể tìm nguồn hoặc tạo learning deck trong phiên này." };
-    }
-    if (state.studyContentLoading === section.id) state.studyContentLoading = "";
+    try { await createSectionLearningPackage(section); }
+    catch (error) { if (epoch === generationEpoch) state.lessonErrors[section.id] = error.message; }
+    if (epoch !== generationEpoch) return;
+    state.studyContentLoading = "";
     persistState();
     render();
   };
-
   const discoverSources = async () => {
-    const section = getSection();
-    state.sourceDiscoveryLoading = true;
-    render();
-    try {
-      const result = await discoverSectionSources(section);
-      showToast(result?.status === "ok" ? "Đã tìm và lọc nguồn chính thống." : "Đang dùng catalog nguồn chính thống đã kiểm duyệt.");
-    } catch {
-      state.discoveredSources[section.id] = { status: "error", sources: [], note: "Không thể kết nối dịch vụ tìm nguồn trong phiên này." };
-      showToast("Chưa tìm được nguồn. Bạn có thể thử lại sau.");
-    }
-    state.sourceDiscoveryLoading = false;
+    try { await discoverSectionSources(getSection()); }
+    catch (error) { showToast(error.message); }
     render();
   };
+  const generateLearningPackage = () => prepareSectionLearning(getSection(), true);
 
-  const generateLearningPackage = async () => {
-    const section = getSection();
-    const sourceResult = state.discoveredSources[section.id];
-    if (!sourceResult?.sources?.length) { showToast("Hãy tìm nguồn chính thống trước."); return; }
-    state.packageLoading = true;
-    render();
-    try {
-      const packageData = await createSectionLearningPackage(section, sourceResult);
-      showToast(packageData?.status === "ok" ? "Đã tạo learning deck từ nguồn đã kiểm chứng." : "Đã dùng learning deck dự phòng an toàn.");
-    } catch {
-      showToast("Chưa tạo được bài học mới; nội dung section hiện tại vẫn được giữ nguyên.");
-    }
-    state.packageLoading = false;
-    render();
+  const renderGenerationError = (error = {}) => {
+    const failure = error || { kind: "assessment", mode: "diagnostic", message: "Hãy tạo lại nội dung cho chủ đề hiện tại." };
+    state.generationError = failure;
+    return `${pageHeader("LEARNING PATH", "Chưa tạo được nội dung", escapeHtml(failure.message || "Bạn có thể thử lại."), "")}<section class="panel-card loading-state"><p>Các câu trả lời đã chọn vẫn được giữ để thử lại.</p><button class="primary-button" type="button" data-action="retry-generation">Thử lại</button><button class="quiet-button" type="button" data-view="setup">Về thiết lập</button></section>`;
   };
 
   document.addEventListener("click", (event) => {
@@ -1294,6 +1311,13 @@
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
+    if (action === "retry-generation") {
+      const error = state.generationError;
+      if (error?.kind === "analyze") submitDiagnostic(error.skip);
+      else loadAssessment(error?.mode || "diagnostic", error?.sectionId || state.selectedSectionId);
+      return;
+    }
+    if (action === "retry-lesson") { prepareSectionLearning(getSection(), true); return; }
     if (action === "reset") reset();
     if (action === "toggle-sidebar") {
       if (sidebarMedia.matches) {
@@ -1324,12 +1348,16 @@
     if (action === "create-path") {
       if (!isValidTopic(state.pathTopic)) { showToast("Hãy nhập chủ đề bạn muốn học."); document.querySelector("#path-topic")?.focus(); return; }
       if (!isValidMinutes(state.pathMinutes)) { showToast("Hãy nhập thời gian học từ 10 đến 240 phút."); document.querySelector("#path-minutes")?.focus(); return; }
+      generationEpoch += 1;
+      resetAssessmentState();
       state.profileConfigured = true;
       state.timePlan = Number(state.pathMinutes);
       state.diagnosticSkipped = state.pathLevel === "new";
       state.diagnosticSubmitted = false;
       state.aiAnalysis = null;
       state.recommendedPath = [];
+      state.generatedSections = [];
+      pack = catalogPack;
       // New learners keep the baseline roadmap flow. Learners who know the
       // topic already enter the diagnostic test immediately.
       state.diagnosticIndex = 0;
@@ -1342,7 +1370,7 @@
       render();
       if (state.diagnosticSkipped) {
         showToast("Đang tạo roadmap nền tảng từ mục tiêu của bạn.");
-        window.setTimeout(() => submitDiagnostic(true), 720);
+        submitDiagnostic(true);
       } else {
         showToast("Đã ghi nhận mục tiêu. Đang sinh diagnostic theo nội dung.");
         loadAssessment("diagnostic");
@@ -1356,7 +1384,7 @@
       const questions = activeDiagnosticQuestions();
       const question = questions[state.diagnosticIndex];
       if (state.diagnosticAnswers[question.id] === undefined) { showToast("Hãy chọn một phương án trước."); return; }
-      if (state.diagnosticIndex < questions.length - 1) { state.diagnosticIndex += 1; render(); } else { state.view = "diagnostic-loading"; render(); window.setTimeout(submitDiagnostic, 720); }
+      if (state.diagnosticIndex < questions.length - 1) { state.diagnosticIndex += 1; render(); } else { state.view = "diagnostic-loading"; render(); submitDiagnostic(); }
     }
     if (action === "redo-diagnostic") { state.diagnosticIndex = 0; state.diagnosticAnswers = {}; state.diagnosticConfidence = {}; state.diagnosticSubmitted = false; state.diagnosticSkipped = false; state.aiAnalysis = null; state.agentMeta = null; state.assessmentQuestions.diagnostic = []; state.assessmentMeta.diagnostic = null; loadAssessment("diagnostic"); }
     if (action === "go-study") { state.selectedSectionId = nextRecommendedSection().id; setView("study"); }
@@ -1377,7 +1405,7 @@
     if (action === "next-slide") moveStudySlide(1);
     if (action === "select-slide") { state.studySlideIndices[state.selectedSectionId] = Number(target.dataset.index) || 0; persistState(); render(); }
     if (action === "toggle-check") { const item = Number(target.dataset.index); state.studyChecks = state.studyChecks.includes(item) ? state.studyChecks.filter((index) => index !== item) : [...state.studyChecks, item]; render(); }
-    if (action === "complete-study") { const section = getSection(); if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; render(); showToast("Section đã được đánh dấu hoàn thành. Mastery test đã mở."); }
+    if (action === "complete-study") { const section = getSection(); if (!hasCurrentLesson(section)) { showToast("Hãy chờ bài học được tạo xong."); return; } if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; render(); showToast("Section đã được đánh dấu hoàn thành. Mastery test đã mở."); }
     if (action === "start-mastery") { if (!state.studyCompleted) { showToast("Hãy hoàn thành section trước khi làm mastery test."); return; } state.masteryIndex = 0; state.masteryAnswers = {}; state.masterySubmitted = false; state.remediationData = null; state.remediationText = ""; state.remediationChecked = false; loadAssessment("mastery", state.selectedSectionId); }
     if (action === "answer-mastery") chooseMasteryAnswer(Number(target.dataset.index));
     if (action === "mastery-next") { const questions = activeMasteryQuestions(); const question = questions[state.masteryIndex]; if (state.masteryAnswers[question.id] === undefined) { showToast("Hãy chọn một phương án trước."); return; } if (state.masteryIndex < questions.length - 1) { state.masteryIndex += 1; render(); } else { state.masterySubmitted = true; render(); } }
@@ -1441,7 +1469,7 @@
       if (!token) { showAuth("login"); return; }
       setAuthToken(token);
       try {
-        const response = await fetch(`${API_BASE}/api/auth/me`, { headers: authHeaders() });
+        const response = await apiFetch("/api/auth/me", { headers: authHeaders() });
         const payload = await response.json().catch(() => ({}));
         if (!response.ok || !payload.user) throw new Error("auth_session_invalid");
         await showAppForUser(payload.user);

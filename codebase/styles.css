@@ -572,12 +572,13 @@ button, a { touch-action: manipulation; }
 .legend-swatch.is-complete { color: #fff; background: var(--mint); border-color: var(--mint); }
 .legend-swatch.is-current { background: var(--indigo); border-color: #fff; box-shadow: 0 0 0 3px rgba(79,70,229,.2); }
 
-.journey-map { position: relative; width: 100%; height: 1850px; overflow: hidden; isolation: isolate; background: radial-gradient(circle at 20% 10%, rgba(129,140,248,.16), transparent 20%), radial-gradient(circle at 80% 32%, rgba(22,163,74,.1), transparent 20%), radial-gradient(circle at 20% 68%, rgba(245,158,11,.12), transparent 21%), linear-gradient(180deg, #f7f7ff 0%, #f4fbff 46%, #f7fff7 100%); border: 1px solid #dde3f0; border-radius: 28px; box-shadow: 0 25px 65px rgba(49,46,129,.09); }
+.deck-slide-body, .deck-bullets li, .application-card p, .practice-card li, .remediation-explanation, .question-card h2, .assessment-card h2 { white-space: pre-wrap; overflow-wrap: anywhere; }
+.journey-map { position: relative; width: 100%; height: var(--map-height, 1850px); overflow: hidden; isolation: isolate; background: radial-gradient(circle at 20% 10%, rgba(129,140,248,.16), transparent 20%), radial-gradient(circle at 80% 32%, rgba(22,163,74,.1), transparent 20%), radial-gradient(circle at 20% 68%, rgba(245,158,11,.12), transparent 21%), linear-gradient(180deg, #f7f7ff 0%, #f4fbff 46%, #f7fff7 100%); border: 1px solid #dde3f0; border-radius: 28px; box-shadow: 0 25px 65px rgba(49,46,129,.09); }
 .journey-map::after { position: absolute; inset: 0; z-index: -3; content: ""; opacity: .32; background-image: linear-gradient(rgba(79,70,229,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(79,70,229,.08) 1px, transparent 1px); background-size: 40px 40px; mask-image: linear-gradient(to bottom, #000, transparent 84%); }
 .journey-sky { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
 .journey-sky i { position: absolute; width: 8px; height: 8px; background: #818cf8; border-radius: 50%; box-shadow: 0 0 0 7px rgba(129,140,248,.1); }
 .journey-sky i:nth-child(1) { top: 6%; left: 48%; }.journey-sky i:nth-child(2) { top: 24%; left: 10%; }.journey-sky i:nth-child(3) { top: 45%; right: 9%; }.journey-sky i:nth-child(4) { top: 66%; left: 48%; }.journey-sky i:nth-child(5) { top: 84%; left: 14%; }
-.journey-road { position: absolute; top: 0; right: 0; left: 0; z-index: 0; width: 100%; height: 1660px; overflow: visible; }
+.journey-road { position: absolute; top: 0; right: 0; left: 0; z-index: 0; width: 100%; height: var(--road-height, 1660px); overflow: visible; }
 .journey-road path { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .road-shadow { stroke: rgba(49,46,129,.14); stroke-width: 72; transform: translateY(8px); }
 .road-base { stroke: url(#journey-road-gradient); stroke-width: 64; }
@@ -617,6 +618,11 @@ button, a { touch-action: manipulation; }
 .checkpoint-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 9px 0; color: var(--muted); font-size: 8px; font-weight: 700; }
 .checkpoint-meta span { display: inline-flex; align-items: center; gap: 4px; }
 .checkpoint-meta svg { width: 11px; height: 11px; }
+.checkpoint-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 8px; margin: 5px 0 9px; color: var(--muted); font-size: 8px; font-weight: 700; }
+.checkpoint-sources > span { display: inline-flex; align-items: center; gap: 4px; }
+.checkpoint-sources svg { width: 11px; height: 11px; color: var(--success); }
+.checkpoint-sources a { color: var(--indigo); text-decoration: none; border-bottom: 1px dashed rgba(79,70,229,.35); }
+.checkpoint-sources a:hover { border-bottom-style: solid; }
 .checkpoint-card .compact-button { min-height: 44px; }
 .checkpoint-locked { display: inline-flex; align-items: center; gap: 5px; min-height: 38px; color: #64748b; font-size: 8px; font-weight: 750; }
 .checkpoint-locked svg { width: 13px; height: 13px; }
@@ -645,7 +651,7 @@ button, a { touch-action: manipulation; }
 }
 @media (max-width: 760px) {
   .journey-header-actions { align-items: stretch; flex-direction: column; }.journey-header-actions > button { width: 100%; }.journey-overview { grid-template-columns: 1fr 88px; padding: 18px; }.journey-overview-copy h2 { font-size: 18px; }.journey-progress-ring { width: 80px; height: 80px; }.journey-progress-ring strong { font-size: 20px; }.journey-facts { grid-template-columns: repeat(2, 1fr); }.journey-legend { justify-content: flex-start; }
-  .journey-map { height: 1850px; border-radius: 20px; }.journey-road { display: none; }.journey-map::before { position: absolute; z-index: 0; top: 80px; bottom: 180px; left: 31px; width: 22px; content: ""; background: linear-gradient(90deg, #4338ca, #6366f1); border: 6px solid #fff; border-radius: 999px; box-shadow: 0 0 0 3px rgba(79,70,229,.14), 0 8px 18px rgba(49,46,129,.16); }
+  .journey-map { height: var(--mobile-map-height, 1850px); border-radius: 20px; }.journey-road { display: none; }.journey-map::before { position: absolute; z-index: 0; top: 80px; bottom: 180px; left: 31px; width: 22px; content: ""; background: linear-gradient(90deg, #4338ca, #6366f1); border: 6px solid #fff; border-radius: 999px; box-shadow: 0 0 0 3px rgba(79,70,229,.14), 0 8px 18px rgba(49,46,129,.16); }
   .journey-micro-point, .journey-checkpoint, .journey-avatar { left: 31px; }.journey-micro-point b { display: none; }.checkpoint-pin { width: 52px; height: 52px; }.checkpoint-pin > span { width: 30px; height: 30px; }.checkpoint-card, .journey-checkpoint.is-left .checkpoint-card, .journey-checkpoint.is-right .checkpoint-card { top: -92px; right: auto; left: 42px; width: min(265px, calc(100vw - 116px)); padding: 12px; }.checkpoint-card-top { grid-template-columns: 52px 1fr; }.reward-art { width: 52px; height: 52px; }.checkpoint-card h2 { font-size: 12px; }.checkpoint-card > p { display: none; }.checkpoint-reward { grid-template-columns: 1fr; }.checkpoint-reward > span { grid-row: auto; }.checkpoint-reward small { display: none; }.checkpoint-meta { margin: 7px 0; }.recommended-ribbon { right: 10px; }.journey-avatar { width: 62px; }.journey-avatar > svg { width: 62px; height: 89px; }.journey-avatar > span { top: -18px; }.finish-card, .journey-checkpoint.is-finish .finish-card { top: 48px !important; left: 42px !important; grid-template-columns: 60px 1fr; width: min(265px, calc(100vw - 116px)); transform: none; }.finish-card > svg { width: 60px; height: 60px; }.journey-note { grid-template-columns: 34px 1fr; }.journey-note .link-button { grid-column: 2; justify-self: start; }
 }
 @media (max-width: 420px) {

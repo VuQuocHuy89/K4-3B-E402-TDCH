@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "Pathwise adaptive learning demo with a Node.js backend",
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test scripts/adaptive-learning.test.js scripts/adaptive-ui.test.js && node scripts/run-roadmap-smoke.js"
   },
   "engines": {
     "node": ">=20"
