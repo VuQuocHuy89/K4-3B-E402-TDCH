@@ -58,6 +58,12 @@
     masteryScore: null,
     masteryPassed: false,
     completedSections: {},
+    assessedStartingSectionId: "",
+    roadmapGuide: "",
+    avatarMood: "happy",
+    completedMicroLessons: {},
+    studyTimeByDay: {},
+    studyTimerStartedAt: null,
     roadmapAnimation: null,
     remediationData: null,
     remediationText: "",
@@ -69,6 +75,11 @@
     packageLoading: false,
     studyContentLoading: "",
     studySlideIndices: {},
+    pdfEvidence: {},
+    pdfEvidenceLoading: "",
+    pdfEvidenceFailures: {},
+    celebration: null,
+    celebratedSections: {},
     finalStarted: false,
     finalIndex: 0,
     finalAnswers: {},
@@ -92,7 +103,7 @@
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
   defaultState.view = "setup";
-  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "assessedStartingSectionId", "roadmapGuide", "avatarMood", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "completedMicroLessons", "celebratedSections", "studyTimeByDay", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
   const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
   const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
   const learnerName = () => currentUser?.name || pack.learner.name;
@@ -199,6 +210,8 @@
       if (!state.assessmentMeta || typeof state.assessmentMeta !== "object") state.assessmentMeta = { mastery: {} };
       if (!state.assessmentMeta.mastery || typeof state.assessmentMeta.mastery !== "object") state.assessmentMeta.mastery = {};
       if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
+      if (!state.completedMicroLessons || typeof state.completedMicroLessons !== "object") state.completedMicroLessons = {};
+      if (!state.studyTimeByDay || typeof state.studyTimeByDay !== "object") state.studyTimeByDay = {};
       state.studyContentLoading = "";
       if (!pack.sections.some((section) => section.id === state.selectedSectionId)) state.selectedSectionId = pack.sections[0].id;
       // Migrate sessions that used the removed option to the diagnostic flow.
@@ -295,12 +308,37 @@
     <path d="m37 70 4 5-4 5-4-5 4-5Z" fill="#F59E0B"/>
   </svg>`;
 
+  // The male sprite sheet is the visual identity. Expression states follow the
+  // supplied female emote reference: welcome, celebration and gentle recovery.
+  const guideCharacter = (mood = "happy") => `<span class="guide-character mood-${mood}" role="img" aria-label="Nhân vật hướng dẫn ${mood === "sad" ? "động viên" : "vui vẻ"}"></span>`;
+
   const journeyFlag = () => `<svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M5 3v20" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M6 4h12l-3 5 3 5H6V4Z" fill="currentColor"/></svg>`;
 
   const trophyArtwork = (complete) => `<svg width="92" height="92" viewBox="0 0 92 92" role="img" aria-label="Cúp hoàn thành lộ trình"><circle cx="46" cy="46" r="44" fill="${complete ? "#FFF7D6" : "#F1F5F9"}"/><path d="M31 18h30v14c0 15-6 24-15 24s-15-9-15-24V18Z" fill="${complete ? "#FBBF24" : "#CBD5E1"}" stroke="${complete ? "#B45309" : "#94A3B8"}" stroke-width="3"/><path d="M31 24H20v7c0 9 6 15 15 15M61 24h11v7c0 9-6 15-15 15" fill="none" stroke="${complete ? "#B45309" : "#94A3B8"}" stroke-width="4" stroke-linejoin="round"/><path d="M46 56v12M33 76h26M38 68h16v8H38z" fill="none" stroke="${complete ? "#B45309" : "#94A3B8"}" stroke-width="4" stroke-linecap="round"/><path d="m46 25 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1 3-6Z" fill="#fff"/></svg>`;
   const getSection = (id = state.selectedSectionId) => pack.sections.find((section) => section.id === id) || pack.sections[0];
   const getCompetency = (id) => pack.competencies.find((competency) => competency.id === id) || pack.competencies[0];
   const getSource = (id) => pack.sources.find((source) => source.id === id);
+  const microLessons = (section) => (section.concepts || []).map((concept, index) => ({
+    id: `${section.id}-part-${index + 1}`,
+    number: `${section.number}.${index + 1}`,
+    title: concept.title,
+    summary: concept.body,
+    slideIndex: index + 1,
+  }));
+  const completedMicroCount = (section) => (state.completedMicroLessons[section.id] || []).length;
+  const microIsComplete = (section, index) => Boolean(state.completedSections[section.id]) || (state.completedMicroLessons[section.id] || []).includes(index);
+  const dateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const todayStudySeconds = () => Math.round(Number(state.studyTimeByDay[dateKey()] || 0));
+  const formatStudyDuration = (seconds) => seconds >= 3600 ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m` : `${Math.floor(seconds / 60)}m`;
+  const flushStudyTime = (force = false) => {
+    if (!state.studyTimerStartedAt || (document.hidden && !force)) return;
+    const elapsed = Math.max(0, Math.floor((Date.now() - state.studyTimerStartedAt) / 1000));
+    if (!elapsed) return;
+    const key = dateKey();
+    state.studyTimeByDay[key] = Number(state.studyTimeByDay[key] || 0) + elapsed;
+    state.studyTimerStartedAt = Date.now();
+    persistState();
+  };
   const activeTopicTitle = () => state.pathTopic || pack.topic.title;
   const topicProgress = () => Math.round((pack.sections.filter((section) => state.completedSections[section.id]).length / pack.sections.length) * 100);
   const activeDiagnosticQuestions = () => state.assessmentQuestions?.diagnostic?.length ? state.assessmentQuestions.diagnostic : pack.diagnosticQuestions;
@@ -459,6 +497,13 @@
       if (response.status === 401) { clearAuthToken(); clearAuthSession(); currentUser = null; showAuth("login", "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.", true); }
       throw new Error(result.message || `api_${response.status}`);
     }
+    return result;
+  };
+
+  const apiGet = async (endpoint) => {
+    const response = await fetch(`${API_BASE}${endpoint}`, { headers: authHeaders() });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.message || `api_${response.status}`);
     return result;
   };
 
@@ -670,9 +715,16 @@
   syncSidebar();
 
   const setView = (view, options = {}) => {
+    if (state.view === "study" && view !== "study") flushStudyTime();
     state.view = view;
     if (options.hash !== false) window.history.replaceState(null, "", `#${view}`);
-    if (view === "study") ensureFocusTimerRunning(); else stopFocusTimer();
+    if (view === "study") {
+      if (!state.studyTimerStartedAt && !document.hidden) state.studyTimerStartedAt = Date.now();
+      ensureFocusTimerRunning();
+    } else {
+      state.studyTimerStartedAt = null;
+      stopFocusTimer();
+    }
     render();
     if (options.scroll !== false) document.querySelector("#main-content")?.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -686,7 +738,7 @@
   const metrics = () => `
     <section class="metric-grid" aria-label="Chỉ số học tập">
       <article class="metric-card"><div class="metric-icon metric-icon-indigo">${icon("pulse")}</div><div><span>Topic mastery</span><strong>${topicProgress()}<span class="metric-unit">%</span></strong><small>${topicProgress() ? "Cập nhật theo section đã pass" : "Bắt đầu từ diagnostic đầu vào"}</small></div></article>
-      <article class="metric-card"><div class="metric-icon metric-icon-mint">${icon("clock")}</div><div><span>Thời gian tuần này</span><strong>0<span class="metric-unit">m</span></strong><small>Chưa có phiên học trong path này</small></div></article>
+      <article class="metric-card"><div class="metric-icon metric-icon-mint">${icon("clock")}</div><div><span>Học hôm nay</span><strong>${formatStudyDuration(todayStudySeconds())}</strong><small>Chỉ tính thời gian dùng ứng dụng để học</small></div></article>
       <article class="metric-card"><div class="metric-icon metric-icon-coral">${icon("flame")}</div><div><span>Learning streak</span><strong>0<span class="metric-unit"> ngày</span></strong><small>Bắt đầu sau phiên học đầu tiên</small></div></article>
       <article class="metric-card"><div class="metric-icon metric-icon-slate">${icon("check")}</div><div><span>Điểm cần pass</span><strong>80<span class="metric-unit">%</span></strong><small>áp dụng cho mỗi section</small></div></article>
     </section>`;
@@ -803,10 +855,28 @@
       state.agentMeta = { live: false, provider: "local-fallback", fallback_reason: "backend_unavailable" };
       state.recommendedPath = state.aiAnalysis.recommended_path || [];
     }
+    if (!skip) {
+      // A diagnostic is evidence, not a demand to repeat known foundations.
+      // Credit only the consecutive foundations before the first gap so later
+      // prerequisites are never jumped over.
+      const firstGap = questions.findIndex((question) => state.diagnosticAnswers[question.id] !== question.correctIndex);
+      const credited = firstGap < 0 ? pack.sections.length - 1 : firstGap;
+      for (let index = 0; index < credited; index += 1) {
+        const section = pack.sections[index];
+        state.completedSections[section.id] = true;
+        state.completedMicroLessons[section.id] = microLessons(section).map((_, microIndex) => microIndex);
+      }
+    }
     state.selectedSectionId = nextRecommendedSection().id;
+    state.assessedStartingSectionId = state.selectedSectionId;
+    state.roadmapGuide = "welcome";
+    state.avatarMood = "happy";
+    state.roadmapAnimation = { from: Math.max(0, pack.sections.findIndex((section) => section.id === state.selectedSectionId)), to: 0, tour: true };
     state.diagnosticSubmitted = !skip;
     state.diagnosticSkipped = skip;
-    state.view = skip ? "roadmap" : "diagnostic-result";
+    // Diagnostic is one-time onboarding. Finish it once, then land directly on
+    // the assessed roadmap instead of leaving a retake screen in navigation.
+    state.view = "roadmap";
     window.history.replaceState(null, "", `#${state.view}`);
     render();
     showToast(skip ? "Đã tạo roadmap nền tảng từ mục tiêu của bạn." : state.agentMeta?.live ? "Agent đã tạo learning profile có căn cứ." : "Đã tạo learning profile bằng fallback an toàn.");
@@ -836,14 +906,14 @@
     const progress = Math.round((completedCount / pack.sections.length) * 100);
     const avatarStop = journeyStops[Math.min(completedCount, journeyStops.length - 1)];
     const allComplete = completedCount === pack.sections.length;
-    const microLabels = ["Nắm khái niệm", "Luyện tình huống", "Vượt mastery test"];
     const roadmapPath = "M180 100 C180 220 770 220 770 340 S240 470 240 590 S760 720 760 850 S220 980 220 1110 S760 1240 760 1370 C760 1480 500 1480 500 1580";
     return `
     ${pageHeader("LEARNING ROADMAP", "Hành trình AI Engineer của bạn", "Mỗi mastery test là một bước tiến thật. Hoàn thành ba điểm nhỏ để mở phần thưởng ở cột mốc tiếp theo.", `<div class="journey-header-actions"><button class="outline-button compact-button" type="button" data-action="preview-journey">${icon("route")} Xem chuyển động</button><div class="time-plan-control"><label for="time-plan-input">Thời gian hôm nay</label><div class="time-plan-input"><input id="time-plan-input" type="number" min="10" max="240" step="1" inputmode="numeric" value="${escapeHtml(state.timePlan)}" aria-label="Số phút học hôm nay" /><span>phút</span><button type="button" data-action="save-time-plan">Lưu</button></div><small>10–240 phút</small></div></div>`)}
+    ${state.roadmapGuide ? `<section class="roadmap-guide panel-card ${state.roadmapGuide === "welcome" ? "is-welcome" : "is-lesson"}" aria-live="polite">${guideCharacter(state.roadmapGuide === "welcome" ? "wave" : "happy")}<div><span class="content-label">PATHWISE GUIDE</span><h2>${state.roadmapGuide === "welcome" ? "Chào bạn, đây là lộ trình được thiết kế riêng cho bạn." : "Bắt đầu bài học ngay thôi!"}</h2><p>${state.roadmapGuide === "welcome" ? "Bạn hãy cùng mình chinh phục chiếc cúp vàng danh giá." : `Bài học tiếp theo: ${escapeHtml(prioritySection.title)} - ${escapeHtml((microLessons(prioritySection)[0] || { title: prioritySection.description }).title)}.`}</p></div><span class="guide-bubble" aria-hidden="true">${icon("spark")}</span></section>` : ""}
     <section class="journey-overview" aria-label="Tóm tắt tiến độ">
       <div class="journey-overview-copy"><span class="summary-label">PERSONALISED QUEST</span><h2>${state.diagnosticSkipped ? "Khởi hành từ nền tảng" : "Đi theo đúng khoảng trống kiến thức"}</h2><p>${planSource}</p></div>
       <div class="journey-progress" role="progressbar" aria-label="Tiến độ lộ trình" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><div class="journey-progress-ring" style="--journey-progress:${progress}"><strong>${progress}%</strong><span>hoàn thành</span></div></div>
-      <dl class="journey-facts"><div><dt>Đã pass</dt><dd>${completedCount}/${pack.sections.length}</dd></div><div><dt>Phiên hôm nay</dt><dd>${state.timePlan} phút</dd></div><div><dt>Mastery gate</dt><dd>80%</dd></div><div><dt>Gap ưu tiên</dt><dd>${gapCount}</dd></div></dl>
+      <dl class="journey-facts"><div><dt>Đã pass</dt><dd>${completedCount}/${pack.sections.length}</dd></div><div><dt>Học hôm nay</dt><dd>${formatStudyDuration(todayStudySeconds())}</dd></div><div><dt>Mastery gate</dt><dd>80%</dd></div><div><dt>Gap ưu tiên</dt><dd>${gapCount}</dd></div></dl>
     </section>
     <div class="journey-legend" aria-label="Chú thích trạng thái"><span><i class="legend-swatch is-complete">${icon("check")}</i>Đã hoàn thành</span><span><i class="legend-swatch is-current"></i>Đang đứng</span><span><i class="legend-swatch"></i>Chưa đi qua</span></div>
     <section class="journey-map" aria-label="Bản đồ lộ trình học tập" style="--journey-progress:${progress}">
@@ -855,7 +925,7 @@
         <path class="road-center" d="${roadmapPath}"/>
         <path class="road-progress" pathLength="100" d="${roadmapPath}" style="stroke-dasharray:${progress} 100"/>
       </svg>
-      ${journeyMicroStops.map((group, segmentIndex) => group.map((point, pointIndex) => { const isDone = Boolean(state.completedSections[pack.sections[segmentIndex].id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
+      ${journeyMicroStops.map((group, segmentIndex) => group.map((point, pointIndex) => { const section = pack.sections[segmentIndex]; const lesson = microLessons(section)[pointIndex] || { title: `Phần ${pointIndex + 1}`, summary: section.description }; const status = sectionState(section, segmentIndex); const isDone = microIsComplete(section, pointIndex); const sectionIsUnlocked = status === "current" || status === "complete"; const canOpen = sectionIsUnlocked; if (!sectionIsUnlocked) return `<span class="journey-micro-point is-concealed" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" aria-hidden="true"></span>`; return `<button class="journey-micro-point ${isDone ? "is-complete" : ""} is-readable" type="button" data-action="open-roadmap-micro" data-section-id="${section.id}" data-micro-index="${pointIndex}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" aria-label="${escapeHtml(lesson.title)}: ${isDone ? "đã hoàn thành" : "có thể học"}" title="${escapeHtml(lesson.summary)}">${isDone ? journeyFlag() : `<i>${lesson.number || pointIndex + 1}</i>`}<b>${escapeHtml(lesson.title)}</b></button>`; }).join("")).join("")}
       ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[index]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(journeyRewards[index].name)}</strong><small>${escapeHtml(journeyRewards[index].note)}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
       <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${journeyStops[6].x}%;--point-y:${journeyStops[6].y}px;--mobile-y:1640px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp Machine Learning Foundations</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : "Hoàn thành đủ 6 cột mốc để chạm tới chiếc cúp cuối hành trình."}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
       <div class="journey-avatar ${state.roadmapAnimation ? "is-advancing" : ""}" style="--point-x:${avatarStop.x}%;--point-y:${avatarStop.y}px;--mobile-y:${80 + completedCount * 260}px" data-stop="${completedCount}">${animeAvatar()}<span>Bạn đang ở đây</span></div>
@@ -898,14 +968,26 @@
     const sourceUrls = Array.isArray(slide.source_urls) ? slide.source_urls : [];
     const sourceCount = sourceUrls.length || (sourceResult?.sources?.length || 0);
     const sourceLinks = sourceUrls.length ? externalSourceLinks(sourceUrls) : "";
-    return `<section class="learning-deck" aria-label="Learning slide deck cho ${escapeHtml(section.title)}">
+    const evidenceKey = `${section.id}:${slide.id || slideIndex}`;
+    const evidence = state.pdfEvidence[evidenceKey];
+    // A section must immediately contain source material to read. The first
+    // visible slide therefore loads its matching PDF pages without requiring a
+    // hidden discovery action; later slides can still be opened by clicking.
+    if (!evidence && !state.pdfEvidenceLoading && !state.pdfEvidenceFailures[evidenceKey]) {
+      window.queueMicrotask(() => loadPdfEvidence(section, slide, slideIndex));
+    }
+    const microRail = `<section class="micro-lesson-rail" aria-label="Các phần nhỏ của section"><div><span class="content-label">LỘ TRÌNH TRONG CHƯƠNG</span><h3>Chọn một phần nhỏ để bắt đầu</h3><p>Bạn có thể mở bất kỳ phần nhỏ nào trong chapter đã được mở; mastery test chỉ mở khi đã đi qua đầy đủ.</p></div><div class="micro-lesson-list">${microLessons(section).map((lesson, lessonIndex) => { const done = microIsComplete(section, lessonIndex); return `<button class="micro-lesson-button ${done ? "is-done" : ""}" type="button" data-action="open-micro-lesson" data-index="${lessonIndex}"><span>${done ? icon("check") : lesson.number}</span><strong>${escapeHtml(lesson.title)}</strong><small>${done ? "Đã đi qua - xem lại bất kỳ lúc nào" : "Mở bài học"}</small>${done ? `<em>${escapeHtml(lesson.summary)}</em>` : ""}</button>`; }).join("")}</div></section>`;
+    return `${microRail}<section class="learning-deck" aria-label="Learning slide deck cho ${escapeHtml(section.title)}">
       <div class="deck-header"><div><span class="content-label">SOURCE-GROUNDED LEARNING DECK</span><h2>Học theo từng slide, hiểu đến nơi</h2><p>Mỗi slide có ý chính, ví dụ, bước áp dụng và nguồn tham chiếu để bạn đọc sâu hơn.</p></div><div class="deck-counter" aria-live="polite"><strong>${String(slideIndex + 1).padStart(2, "0")}</strong><span>/ ${String(slides.length).padStart(2, "0")} slides</span></div></div>
-      <div class="deck-stage slide-type-${escapeHtml(slide.type || "concept")}" tabindex="0" aria-label="Slide ${slideIndex + 1}: ${escapeHtml(slide.title)}">
+      <div class="deck-stage slide-type-${escapeHtml(slide.type || "concept")}" tabindex="0" data-action="show-pdf-evidence" data-evidence-key="${evidenceKey}" data-slide-index="${slideIndex}" aria-label="Slide ${slideIndex + 1}: ${escapeHtml(slide.title)}. Bấm để xem trích dẫn PDF gốc.">
         <div class="deck-stage-top"><span class="deck-slide-type">${escapeHtml(slideTypeLabel(slide.type))}</span><span class="deck-source-count">${icon("shield")} ${sourceCount} nguồn đã lọc</span></div>
         <div class="deck-slide-copy"><h3>${escapeHtml(slide.title)}</h3>${slide.subtitle ? `<p class="deck-slide-subtitle">${escapeHtml(slide.subtitle)}</p>` : ""}<p class="deck-slide-body">${escapeHtml(slide.body)}</p><ul class="deck-bullets">${(slide.bullets || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul></div>
         <div class="deck-takeaway"><span>${icon("spark")} TAKEAWAY</span><strong>${escapeHtml(slide.takeaway)}</strong>${slide.checkpoint ? `<p><b>Tự hỏi:</b> ${escapeHtml(slide.checkpoint)}</p>` : ""}</div>
         ${sourceLinks ? `<div class="deck-sources"><span>Nguồn của slide</span>${sourceLinks}</div>` : ""}
       </div>
+      <p class="deck-evidence-hint">${icon("book")} Bấm vào slide để xem nguyên văn và ảnh trang PDF gốc.</p>
+      ${state.pdfEvidenceLoading === evidenceKey ? `<section class="pdf-evidence panel-card" aria-live="polite"><p>Đang mở trích dẫn từ PDF…</p></section>` : ""}
+      ${evidence ? `<section class="pdf-evidence panel-card" aria-label="Trích dẫn PDF gốc"><div class="pdf-evidence-heading"><div><span class="content-label">TRÍCH DẪN PDF GỐC</span><h3>${escapeHtml(evidence.document || "Tài liệu học")}</h3><p>Trang được chọn theo nội dung của slide “${escapeHtml(slide.title)}”. Văn bản bên dưới giữ nguyên theo trang PDF để bạn đối chiếu.</p></div><span>${evidence.excerpts?.length || 0} trang</span></div><div class="pdf-evidence-list">${(evidence.excerpts || []).map((excerpt) => `<article class="pdf-evidence-page"><h4>Trang ${excerpt.page}</h4><img src="${API_BASE}/api/pdf/page?page=${encodeURIComponent(excerpt.page)}" alt="Ảnh trang ${excerpt.page} của tài liệu PDF" loading="lazy" /><details open><summary>Nguyên văn có trong PDF</summary><pre>${escapeHtml(excerpt.text)}</pre></details></article>`).join("")}</div></section>` : ""}
       <div class="deck-controls"><button class="outline-button compact-button" type="button" data-action="prev-slide" aria-label="Slide trước" ${slideIndex === 0 ? "disabled" : ""}>${icon("back")} Trước</button><div class="deck-dots" role="tablist" aria-label="Chọn slide">${slides.map((item, index) => `<button type="button" role="tab" class="deck-dot ${index === slideIndex ? "is-active" : ""}" aria-label="Mở slide ${index + 1}: ${escapeHtml(item.title)}" aria-selected="${index === slideIndex}" data-action="select-slide" data-index="${index}"></button>`).join("")}</div><button class="primary-button compact-button" type="button" data-action="next-slide" aria-label="Slide tiếp theo" ${slideIndex === slides.length - 1 ? "disabled" : ""}>Tiếp theo ${icon("arrow")}</button></div>
       <p class="deck-keyboard-hint">Mẹo: dùng phím ← → để chuyển slide. Đến slide cuối, hoàn thành checklist bên cạnh để mở mastery test.</p>
     </section>`;
@@ -918,9 +1000,33 @@
     const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
     if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
     const current = Number(state.studySlideIndices[section.id] || 0);
+    // Concept slides are the small ordered lessons of this chapter. Moving past
+    // one records it; users cannot skip the sequence through the roadmap.
+    const microIndex = current - 1;
+    if (delta > 0 && microIndex >= 0 && microIndex < microLessons(section).length && !microIsComplete(section, microIndex)) {
+      state.completedMicroLessons[section.id] = [...(state.completedMicroLessons[section.id] || []), microIndex];
+      showToast(`Đã hoàn thành ${microLessons(section)[microIndex].number}: ${microLessons(section)[microIndex].title}.`);
+    }
     state.studySlideIndices[section.id] = Math.max(0, Math.min(slides.length - 1, current + delta));
     persistState();
     render();
+  };
+
+  const loadPdfEvidence = async (section, slide, slideIndex) => {
+    const key = `${section.id}:${slide.id || slideIndex}`;
+    if (state.pdfEvidence[key] || state.pdfEvidenceLoading === key) return;
+    state.pdfEvidenceLoading = key;
+    render();
+    try {
+      const result = await apiGet(`/api/pdf/evidence?section_id=${encodeURIComponent(section.id)}&slide_title=${encodeURIComponent(slide.title || "")}`);
+      state.pdfEvidence[key] = result;
+    } catch {
+      state.pdfEvidenceFailures[key] = true;
+      showToast("Chưa thể mở trích dẫn PDF. Hãy kiểm tra PDF và thử lại.");
+    } finally {
+      state.pdfEvidenceLoading = "";
+      render();
+    }
   };
 
   const renderLessonDepth = (section, studyPackage) => {
@@ -981,8 +1087,20 @@
     state.masteryScore = score.percent;
     const passed = score.percent >= pack.topic.passMark;
     state.masteryPassed = passed;
-    if (passed) state.completedSections[getSection().id] = true;
     const section = getSection();
+    if (passed) {
+      state.completedSections[section.id] = true;
+      if (!state.celebratedSections[section.id]) {
+        const celebrations = [
+          { type: "siuuu", title: "Siuuu! Bạn đúng là thiên tài!", text: `Bạn đã chinh phục ${section.title}. Chặng mới đã sẵn sàng.` },
+          { type: "hearts", title: "Xuất sắc! Trái tim cho nỗ lực của bạn", text: "Bạn đã pass mastery với ${score.percent}%. Tiếp tục giữ nhịp này nhé!" },
+          { type: "fireworks", title: "Pháo hoa cho một cột mốc mới!", text: "Kiến thức đã được chứng minh. Mở khóa section tiếp theo thôi." },
+        ];
+        state.celebration = { ...celebrations[pack.sections.findIndex((item) => item.id === section.id) % celebrations.length], section: section.title };
+        state.celebratedSections[section.id] = true;
+      }
+    }
+    state.avatarMood = passed ? "celebrate" : "sad";
     return `${pageHeader("SECTION MASTERY · KẾT QUẢ", passed ? "Section đã được mở khóa" : "Cần thêm một vòng remediation", passed ? `Bạn đã chứng minh có thể dùng kiến thức ${escapeHtml(section.title)} trong các câu hỏi mới.` : "Không sao — hệ thống giữ lại đúng phần gap để bạn ôn rồi thử lại.", `<span class="pass-rule ${passed ? "is-passed" : "is-retry"}"><strong>${score.percent}%</strong><small>${passed ? "passed" : "chưa đạt"}</small></span>`)}<div class="mastery-result-card ${passed ? "is-pass" : "is-fail"}><div class="result-symbol">${passed ? icon("check") : icon("refresh")}</div><div><span class="panel-kicker">${passed ? "MASTERY PASSED" : "TARGETED RETEST"}</span><h2>${passed ? "Bạn có thể đi tiếp" : "Gap vẫn còn ở phần ứng dụng"}</h2><p>${passed ? "Section tiếp theo đã sẵn sàng mở. Lộ trình được cập nhật theo tiến độ mới." : "Ôn lại ví dụ, viết explain-back ngắn và làm lại test. Chỉ câu sai mới được đưa vào vòng ôn tiếp theo."}</p></div></div><div class="mastery-score-grid"><div><strong>${score.correct}/${score.total}</strong><span>câu đúng</span></div><div><strong>${score.percent}%</strong><span>kết quả</span></div><div><strong>80%</strong><span>ngưỡng pass</span></div></div><div class="result-cta panel-card"><div><span class="panel-kicker">${passed ? "NEXT STEP" : "RECOVERY PATH"}</span><h2>${passed ? "Tiếp tục lộ trình" : "Ôn lại đúng điểm chưa chắc"}</h2><p>${passed ? "Section tiếp theo được mở trong roadmap. Bạn vẫn có thể quay lại xem lại section này." : "Khi retest đạt 80%, section tiếp theo mới được mở."}</p></div><div>${passed ? `<button class="primary-button" type="button" data-action="next-section">Mở section tiếp theo ${icon("arrow")}</button>` : `<button class="primary-button" type="button" data-action="start-remediation">Mở remediation ${icon("arrow")}</button>`}</div></div>`;
   };
 
@@ -1065,7 +1183,8 @@
     if (normalized.includes("accuracy") || normalized.includes("classifier") || normalized.includes("classification")) {
       return { text: "Accuracy là tỷ lệ dự đoán đúng, nhưng chưa đủ trong mọi tình huống. Khi lớp mất cân bằng hoặc false positive và false negative có chi phí khác nhau, cần xem thêm metric phù hợp.", sources: ["GML-CH05-08"], confidence: "high" };
     }
-    return { text: "Mình chưa đủ tín hiệu để trả lời chắc từ phần tài liệu đã map. Hãy thu hẹp câu hỏi về cách đặt bài toán, loại learning, regression, overfitting hoặc đánh giá classification.", sources: [], confidence: "medium" };
+    const mlRelated = ["model", "data", "dữ liệu", "feature", "target", "train", "test", "machine", "learning", "học máy"].some((term) => normalized.includes(term));
+    return { text: mlRelated ? "Mình chưa đủ căn cứ để trả lời chính xác câu này. Bạn có thể đối chiếu chương về khái niệm và problem framing trước, rồi hỏi lại với tên khái niệm hoặc model cụ thể." : "Mình chưa đủ tín hiệu để trả lời chắc từ phần tài liệu đã map. Hãy thu hẹp câu hỏi về cách đặt bài toán, loại learning, regression, overfitting hoặc đánh giá classification.", sources: mlRelated ? ["GML-CH01"] : [], confidence: "medium" };
   };
 
   const confidenceLabel = (level) => level === "high" ? "Grounded · confidence cao" : level === "medium" ? "Cần kiểm tra thêm" : "Ngoài phạm vi nguồn";
@@ -1104,24 +1223,31 @@
     const from = journeyStops[animation.from];
     const to = journeyStops[animation.to];
     const segment = journeyMicroStops[Math.min(animation.from, journeyMicroStops.length - 1)] || [];
-    const route = [from, ...segment, to];
-    const points = animation.preview ? [...route, ...route.slice(0, -1).reverse()] : route;
+    const route = animation.tour ? journeyStops : [from, ...segment, to];
+    const points = (animation.preview || animation.tour) ? [...route, ...route.slice(0, -1).reverse()] : route;
     const finalPoint = animation.preview ? from : to;
     const width = map.clientWidth;
     const frames = points.map((point, index) => ({
       transform: `translate(-50%, -91%) translate(${((point.x - finalPoint.x) / 100) * width}px, ${point.y - finalPoint.y}px)`,
       offset: index / (points.length - 1),
     }));
-    const motion = avatar.animate(frames, { duration: animation.preview ? 3000 : 2100, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" });
+    const motion = avatar.animate(frames, { duration: animation.tour ? 5200 : animation.preview ? 3000 : 2100, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" });
     document.querySelectorAll(`.journey-micro-point[data-segment="${animation.from}"]`).forEach((point, index) => {
       point.animate([{ transform: "translate(-50%, -50%) scale(.72)", opacity: .45 }, { transform: "translate(-50%, -50%) scale(1.22)", opacity: 1 }, { transform: "translate(-50%, -50%) scale(1)", opacity: 1 }], { duration: 520, delay: 420 + index * 360, easing: "cubic-bezier(.2,.8,.2,1)" });
     });
     motion.finished.then(() => {
       avatar.classList.remove("is-advancing");
       state.roadmapAnimation = null;
+      if (animation.tour) { state.roadmapGuide = "lesson"; render(); }
       liveRegion.textContent = animation.preview ? "Đã phát thử chuyển động trên lộ trình." : "Avatar đã tới cột mốc mới. Ba cờ của chặng vừa qua đã hoàn thành.";
       document.querySelector(`.journey-checkpoint:nth-of-type(${animation.to + 1}) .reward-art`)?.animate([{ transform: "scale(.75) rotate(-8deg)" }, { transform: "scale(1.12) rotate(4deg)" }, { transform: "scale(1) rotate(0)" }], { duration: 680, easing: "cubic-bezier(.2,.9,.2,1)" });
     }).catch(() => {});
+  };
+
+  const renderCelebration = () => {
+    if (!state.celebration) return "";
+    const celebration = state.celebration;
+    return `<section class="celebration-overlay celebration-${escapeHtml(celebration.type)}" role="dialog" aria-modal="true" aria-labelledby="celebration-title"><div class="celebration-particles" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="celebration-card"><span class="celebration-kicker">SECTION COMPLETE</span><div class="celebration-mark" aria-hidden="true">${celebration.type === "hearts" ? "♥" : celebration.type === "fireworks" ? "✦" : "↑"}</div><h2 id="celebration-title">${escapeHtml(celebration.title)}</h2><p>${escapeHtml(celebration.text)}</p><strong>${escapeHtml(celebration.section)}</strong><button class="primary-button" type="button" data-action="dismiss-celebration">Tiếp tục hành trình ${icon("arrow")}</button></div></section>`;
   };
 
   const render = () => {
@@ -1129,6 +1255,13 @@
     persistState();
     const view = ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : ["assessment-loading", "mastery-loading"].includes(state.view) ? renderAssessmentLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
     viewContainer.innerHTML = view();
+    if (state.view === "mastery" && state.masterySubmitted) {
+      const failed = !state.masteryPassed;
+      viewContainer.insertAdjacentHTML("afterbegin", failed
+        ? `<section class="coach-message coach-recovery" aria-live="polite">${guideCharacter("sad")}<p><strong>Bạn đã cố gắng rồi, không sao đâu.</strong> Cùng ôn lại kiến thức còn thiếu nào.</p></section>`
+        : `<section class="coach-message coach-celebrate" aria-live="polite">${guideCharacter("celebrate")}<p><strong>Tuyệt vời!</strong> Bạn đã mở khóa chặng tiếp theo.</p></section>`);
+    }
+    viewContainer.insertAdjacentHTML("afterbegin", renderCelebration());
     if (viewChanged) {
       viewContainer.classList.remove("view-enter");
       void viewContainer.offsetWidth;
@@ -1147,6 +1280,8 @@
     if (mobileContext) mobileContext.textContent = state.profileConfigured ? activeTopicTitle() : "Thiết lập learning path";
     document.querySelectorAll("[data-icon]").forEach((element) => { if (!element.innerHTML) element.innerHTML = icon(element.dataset.icon); });
     document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view || (state.view === "diagnostic-result" && item.dataset.view === "diagnostic")));
+    const diagnosticNav = document.querySelector("#diagnostic-nav");
+    if (diagnosticNav) diagnosticNav.hidden = Boolean(state.diagnosticSubmitted || state.diagnosticSkipped);
     if (state.sidebarOpen) document.querySelector(".sidebar")?.classList.add("is-open");
     if (state.view === "mastery" && state.masterySubmitted && state.masteryPassed) {
       const nextButton = document.querySelector('[data-action="next-section"]');
@@ -1291,9 +1426,11 @@
       closeSidebar();
       return;
     }
+    if (event.target.closest(".deck-sources a")) return;
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
+    if (action === "dismiss-celebration") { state.celebration = null; persistState(); render(); return; }
     if (action === "reset") reset();
     if (action === "toggle-sidebar") {
       if (sidebarMedia.matches) {
@@ -1371,13 +1508,42 @@
       state.focusStarted = false;
       setView("study");
     }
+    if (action === "open-roadmap-micro") {
+      const selectedSection = getSection(target.dataset.sectionId);
+      const selectedIndex = pack.sections.findIndex((section) => section.id === selectedSection.id);
+      const microIndex = Number(target.dataset.microIndex);
+      if (sectionState(selectedSection, selectedIndex) !== "current" && !state.completedSections[selectedSection.id]) { showToast("Hãy mở chặng này trước."); return; }
+      state.selectedSectionId = selectedSection.id;
+      state.studySlideIndices[selectedSection.id] = Math.max(1, microIndex + 1);
+      state.studyChecks = state.completedSections[selectedSection.id] ? selectedSection.checklist.map((_, index) => index) : [];
+      state.studyCompleted = Boolean(state.completedSections[selectedSection.id]);
+      persistState();
+      setView("study");
+      window.setTimeout(() => document.querySelector(".learning-deck")?.scrollIntoView({ behavior: "smooth", block: "start" }), 80);
+    }
     if (action === "discover-sources") discoverSources();
     if (action === "generate-package") generateLearningPackage();
     if (action === "prev-slide") moveStudySlide(-1);
     if (action === "next-slide") moveStudySlide(1);
+    if (action === "show-pdf-evidence") {
+      const section = getSection();
+      const studyPackage = state.generatedPackages[section.id] || section;
+      const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
+      const slideIndex = Number(target.dataset.slideIndex || state.studySlideIndices[section.id] || 0);
+      const slide = slides[Math.max(0, Math.min(slides.length - 1, slideIndex))];
+      loadPdfEvidence(section, slide, slideIndex);
+    }
+    if (action === "open-micro-lesson") {
+      const section = getSection();
+      const index = Number(target.dataset.index);
+      state.studySlideIndices[section.id] = Math.max(1, Math.min(microLessons(section).length, index + 1));
+      persistState();
+      render();
+      document.querySelector(".learning-deck")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
     if (action === "select-slide") { state.studySlideIndices[state.selectedSectionId] = Number(target.dataset.index) || 0; persistState(); render(); }
     if (action === "toggle-check") { const item = Number(target.dataset.index); state.studyChecks = state.studyChecks.includes(item) ? state.studyChecks.filter((index) => index !== item) : [...state.studyChecks, item]; render(); }
-    if (action === "complete-study") { const section = getSection(); if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; render(); showToast("Section đã được đánh dấu hoàn thành. Mastery test đã mở."); }
+    if (action === "complete-study") { const section = getSection(); const remainingParts = microLessons(section).length - completedMicroCount(section); if (remainingParts > 0) { showToast(`Hãy hoàn thành ${remainingParts} phần nhỏ còn lại của chương trước.`); return; } if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; render(); showToast("Đã đi qua toàn bộ phần nhỏ. Mastery test đã mở."); }
     if (action === "start-mastery") { if (!state.studyCompleted) { showToast("Hãy hoàn thành section trước khi làm mastery test."); return; } state.masteryIndex = 0; state.masteryAnswers = {}; state.masterySubmitted = false; state.remediationData = null; state.remediationText = ""; state.remediationChecked = false; loadAssessment("mastery", state.selectedSectionId); }
     if (action === "answer-mastery") chooseMasteryAnswer(Number(target.dataset.index));
     if (action === "mastery-next") { const questions = activeMasteryQuestions(); const question = questions[state.masteryIndex]; if (state.masteryAnswers[question.id] === undefined) { showToast("Hãy chọn một phương án trước."); return; } if (state.masteryIndex < questions.length - 1) { state.masteryIndex += 1; render(); } else { state.masterySubmitted = true; render(); } }
@@ -1434,7 +1600,17 @@
     }
   });
 
-  window.addEventListener("hashchange", () => { const view = window.location.hash.replace("#", ""); if (view) { state.view = view; render(); } });
+  window.addEventListener("hashchange", () => {
+    const view = window.location.hash.replace("#", "");
+    if (!view) return;
+    if (view === "diagnostic" && (state.diagnosticSubmitted || state.diagnosticSkipped)) { setView("roadmap"); return; }
+    setView(view);
+  });
+  window.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushStudyTime(true);
+    else if (state.view === "study") state.studyTimerStartedAt = Date.now();
+  });
+  window.setInterval(() => { if (state.view === "study") flushStudyTime(); }, 15000);
   const bootstrapAuth = async () => {
     if (API_BASE) {
       const token = readAuthToken();

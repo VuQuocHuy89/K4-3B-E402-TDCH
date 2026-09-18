@@ -27,8 +27,17 @@ const rootDir = path.resolve(__dirname, "..");
 const codebaseDir = path.join(rootDir, "codebase");
 const documentPdfUrl = String(process.env.DOCUMENT_PDF_URL || "").trim();
 const documentCachePath = process.env.DOCUMENT_PDF_CACHE_PATH || path.join("/tmp", "pathwise-document.pdf");
-const pdfPath = documentPdfUrl ? documentCachePath : (process.env.DOCUMENT_PDF_PATH || path.join(rootDir, "Grokking Machine Learning.pdf"));
+const pdfImageCacheDir = path.join("/tmp", "pathwise-pdf-pages");
+const pdfPath = documentPdfUrl ? documentCachePath : (process.env.DOCUMENT_PDF_PATH || path.join(rootDir, "Grokking Machine Learning-vi.pdf"));
 const documentFileName = documentPdfUrl ? "Grokking Machine Learning.pdf" : path.basename(pdfPath);
+// Poppler is installed through winget on Windows. An explicit override keeps
+// production portable while the local fallback works before a shell restart.
+const pdftotextPath = process.env.PDFTOTEXT_PATH || (process.platform === "win32"
+  ? path.join(process.env.LOCALAPPDATA || "", "Microsoft", "WinGet", "Packages", "oschwartz10612.Poppler_Microsoft.Winget.Source_8wekyb3d8bbwe", "poppler-25.07.0", "Library", "bin", "pdftotext.exe")
+  : "pdftotext");
+const pdftoppmPath = process.env.PDFTOPPM_PATH || (process.platform === "win32"
+  ? path.join(path.dirname(pdftotextPath), "pdftoppm.exe")
+  : "pdftoppm");
 const traceFile = process.env.AI_TRACE_FILE || "/tmp/pathwise-agent-trace.jsonl";
 
 const traceLimit = 12000;
@@ -300,7 +309,7 @@ const downloadDocument = async () => {
 const loadDocument = async () => {
   try {
     await downloadDocument();
-    const { stdout } = await execFileAsync("pdftotext", ["-layout", pdfPath, "-"], { maxBuffer: 64 * 1024 * 1024 });
+    const { stdout } = await execFileAsync(pdftotextPath, ["-layout", pdfPath, "-"], { maxBuffer: 64 * 1024 * 1024 });
     documentState.text = stdout;
     documentState.pages = stdout.split("\f").map((page) => page.trim()).filter(Boolean);
     documentState.loaded = documentState.pages.length > 0;
@@ -324,6 +333,20 @@ const relevantDocumentContext = (query, maxPages = 3) => {
   }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score).slice(0, maxPages);
   const selected = scored.length ? scored : documentState.pages.slice(0, 2).map((page, index) => ({ index, page }));
   return selected.map((item) => `[PDF page ${item.index + 1}]\n${item.page.slice(0, 2200)}`).join("\n\n").slice(0, 7000);
+};
+
+// The slide itself is a teaching aid. This resolver is deliberately separate
+// so that the learner can inspect the original PDF page and its full text.
+const relevantDocumentPages = (query, maxPages = 2) => {
+  if (!documentState.loaded) return [];
+  const terms = new Set(queryTerms(query));
+  const scored = documentState.pages.map((page, index) => {
+    const words = normalise(page);
+    const score = [...terms].reduce((total, term) => total + (words.includes(term) ? 1 : 0), 0);
+    return { index, score, text: page };
+  }).filter((item) => item.score > 0).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, maxPages);
+  const selected = scored.length ? scored : documentState.pages.slice(0, maxPages).map((text, index) => ({ index, score: 0, text }));
+  return selected.map((item) => ({ page: item.index + 1, text: item.text, relevance: item.score }));
 };
 
 const systemPrompt = (route, input) => `You are Pathwise, a bounded Vietnamese learning-path agent for a learner who wants to become an AI Engineer. Route: ${route}. Use only the mapped topic and PDF excerpts below. Return JSON only. Never invent learner facts, scores, IDs or citations. The deterministic application owns answer scoring, pass/fail and section unlocks. If evidence is insufficient, return no_evidence and explain the limit.
@@ -759,7 +782,8 @@ const fallback = (route, input) => {
     if (["decision tree", "neural", "ensemble", "support vector", "gradient", "xgboost"].some((term) => question.includes(term))) return { status: "ok", answer: "Đây là các họ model khác nhau; nên so sánh chúng bằng cùng quy trình validation, metric và trade-off triển khai phù hợp với bài toán.", confidence: 0.78, source_ids: ["GML-CH09-12"], handoff: "" };
     if (question.includes("data engineering") || question.includes("thuc te") || question.includes("practice") || question.includes("real-life")) return { status: "ok", answer: "Một hệ thống ML thực tế không chỉ có model; cần kết nối dữ liệu, quy trình xử lý và cách theo dõi chất lượng sau triển khai.", confidence: 0.76, source_ids: ["GML-CH13"], handoff: "" };
     if (question.includes("machine learning") || question.includes("rule-based")) return { status: "ok", answer: "Machine learning học một quy luật từ dữ liệu để tạo dự đoán hoặc quyết định cho trường hợp mới, thay vì chỉ chạy một tập luật cố định.", confidence: 0.86, source_ids: ["GML-CH01"], handoff: "" };
-    return { status: "no_evidence", answer: "Mình chưa đủ tín hiệu để trả lời chắc từ phần tài liệu đã map. Hãy hỏi cụ thể hơn về cách đặt bài toán, loại learning, regression, overfitting hoặc đánh giá classification.", confidence: 0.35, source_ids: [], handoff: "Thu hẹp câu hỏi về một khái niệm trong tài liệu." };
+    const mlRelated = ["model", "data", "du lieu", "feature", "target", "train", "test", "machine", "learning", "hoc may"].some((term) => question.includes(term));
+    return { status: "no_evidence", answer: mlRelated ? "Mình chưa tìm được đoạn đủ cụ thể để trả lời chắc câu hỏi này. Hãy đối chiếu phần định nghĩa và cách đặt bài toán trước, rồi hỏi lại với tên model hoặc khái niệm cụ thể để mình trích đúng chương." : "Mình chưa đủ tín hiệu để trả lời chắc từ phần tài liệu đã map. Hãy hỏi cụ thể hơn về cách đặt bài toán, loại learning, regression, overfitting hoặc đánh giá classification.", confidence: 0.35, source_ids: mlRelated ? ["GML-CH01"] : [], handoff: "Thu hẹp câu hỏi về một khái niệm trong tài liệu." };
   }
   if (route === "remediation") {
     const section = sections.find((item) => item.id === input.section_id) || sections[0];
@@ -834,6 +858,35 @@ const api = async (req, res, url) => {
     providers: { order: providerOrder(), gemini: configured("gemini"), openrouter: configured("openrouter") },
     database: { configured: Boolean(process.env.DATABASE_URL), ready: Boolean(dbPool && !dbInitError), content_catalog_ready: contentCatalogReady, error: dbInitError },
   });
+  if (req.method === "GET" && pathname === "/api/pdf/evidence") {
+    if (!documentState.loaded) return json(res, 503, { error: "document_unavailable", message: "PDF chưa sẵn sàng để trích dẫn." });
+    const section = sections.find((item) => item.id === String(url.searchParams.get("section_id") || ""));
+    const slideTitle = String(url.searchParams.get("slide_title") || "").slice(0, 240);
+    if (!section) return json(res, 400, { error: "invalid_section" });
+    const concepts = (section.concepts || []).map((item) => `${item.title} ${item.body}`).join(" ");
+    const query = `${section.title} ${section.description || ""} ${section.objective || ""} ${slideTitle} ${concepts}`;
+    return json(res, 200, { document: documentState.fileName, section_id: section.id, slide_title: slideTitle, excerpts: relevantDocumentPages(query) });
+  }
+  if (req.method === "GET" && pathname === "/api/pdf/page") {
+    if (!documentState.loaded) return json(res, 503, { error: "document_unavailable" });
+    const page = Number(url.searchParams.get("page"));
+    if (!Number.isInteger(page) || page < 1 || page > documentState.pages.length) return json(res, 400, { error: "invalid_page" });
+    try {
+      const outputRoot = path.join(pdfImageCacheDir, `page-${page}`);
+      const pngPath = `${outputRoot}.png`;
+      let png;
+      try { png = await fs.readFile(pngPath); }
+      catch {
+        await fs.mkdir(pdfImageCacheDir, { recursive: true });
+        await execFileAsync(pdftoppmPath, ["-f", String(page), "-l", String(page), "-png", "-singlefile", "-r", "120", pdfPath, outputRoot], { maxBuffer: 32 * 1024 * 1024 });
+        png = await fs.readFile(pngPath);
+      }
+      res.writeHead(200, { "Content-Type": "image/png", "Content-Length": png.length, "Cache-Control": "public, max-age=86400" });
+      return res.end(png);
+    } catch (error) {
+      return json(res, 503, { error: "pdf_render_unavailable", message: "Không thể render trang PDF.", detail: error.code || error.message });
+    }
+  }
   if (pathname === "/api/auth/me" && req.method === "GET") {
     try {
       const user = await authenticatedUser(req);
