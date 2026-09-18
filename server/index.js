@@ -16,6 +16,7 @@ const {
   sourceIds,
   sectionIds,
   competencyIds,
+  roadmapReference,
 } = require("./topic-context");
 const { discoverCatalogSources, sanitizeSources } = require("./source-catalog");
 
@@ -23,7 +24,10 @@ const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
 const rootDir = path.resolve(__dirname, "..");
 const codebaseDir = path.join(rootDir, "codebase");
-const pdfPath = process.env.DOCUMENT_PDF_PATH || path.join(rootDir, "Grokking Machine Learning.pdf");
+const documentPdfUrl = String(process.env.DOCUMENT_PDF_URL || "").trim();
+const documentCachePath = process.env.DOCUMENT_PDF_CACHE_PATH || path.join("/tmp", "pathwise-document.pdf");
+const pdfPath = documentPdfUrl ? documentCachePath : (process.env.DOCUMENT_PDF_PATH || path.join(rootDir, "Grokking Machine Learning.pdf"));
+const documentFileName = documentPdfUrl ? "Grokking Machine Learning.pdf" : path.basename(pdfPath);
 const traceFile = process.env.AI_TRACE_FILE || "/tmp/pathwise-agent-trace.jsonl";
 
 const traceLimit = 12000;
@@ -191,7 +195,7 @@ const authenticatedUser = async (req) => {
 const documentState = {
   loaded: false,
   path: pdfPath,
-  fileName: path.basename(pdfPath),
+  fileName: documentFileName,
   text: "",
   pages: [],
   error: null,
@@ -241,8 +245,28 @@ const modelFor = (name) => name === "openrouter"
   ? (process.env.OPENROUTER_MODEL || "openrouter/free")
   : (process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-3.6-flash");
 
+const downloadDocument = async () => {
+  if (!documentPdfUrl) return;
+  let parsedUrl;
+  try {
+    parsedUrl = new URL(documentPdfUrl);
+  } catch {
+    throw new Error("document_url_invalid");
+  }
+  if (parsedUrl.protocol !== "https:") throw new Error("document_url_must_use_https");
+  const timeoutMs = Number(process.env.DOCUMENT_PDF_TIMEOUT_MS || 20000);
+  const response = await fetch(documentPdfUrl, { signal: AbortSignal.timeout(timeoutMs) });
+  if (!response.ok) throw new Error(`document_download_http_${response.status}`);
+  const content = Buffer.from(await response.arrayBuffer());
+  if (content.length > 50 * 1024 * 1024) throw new Error("document_too_large");
+  if (content.subarray(0, 5).toString() !== "%PDF-") throw new Error("document_not_pdf");
+  await fs.mkdir(path.dirname(documentCachePath), { recursive: true });
+  await fs.writeFile(documentCachePath, content);
+};
+
 const loadDocument = async () => {
   try {
+    await downloadDocument();
     const { stdout } = await execFileAsync("pdftotext", ["-layout", pdfPath, "-"], { maxBuffer: 64 * 1024 * 1024 });
     documentState.text = stdout;
     documentState.pages = stdout.split("\f").map((page) => page.trim()).filter(Boolean);
@@ -278,7 +302,9 @@ Allowed sections:
 ${sectionContext()}
 
 Document-grounded excerpts from ${topicContext.documentName}:
-${relevantDocumentContext(JSON.stringify(input))}`;
+${relevantDocumentContext(JSON.stringify(input))}
+
+External orientation reference (link only; do not reproduce its content): ${roadmapReference.url}`;
 
 const schemas = {
   analyze: {
@@ -432,6 +458,7 @@ const sectionForCompetency = (id) => sections.find((item) => item.competencyId =
 const validSources = (ids = []) => [...new Set((Array.isArray(ids) ? ids : []).filter((id) => sourceIds.has(id)))];
 const safeAnalysis = (data) => ({
   ...data,
+  roadmap_ref: roadmapReference,
   confidence: Math.max(0, Math.min(1, Number(data.confidence) || 0)),
   competency_gaps: (Array.isArray(data.competency_gaps) ? data.competency_gaps : []).filter((item) => competencyIds.has(item.competency_id)).map((item) => ({ ...item, source_ids: validSources(item.source_ids) })),
   recommended_path: (Array.isArray(data.recommended_path) ? data.recommended_path : []).filter((item) => sectionIds.has(item.section_id)).map((item) => ({ ...item, estimated_minutes: Number(item.estimated_minutes) || sections.find((section) => section.id === item.section_id).duration })),
@@ -720,7 +747,7 @@ const api = async (req, res, url) => {
   if (req.method === "GET" && pathname === "/api/health") return json(res, 200, {
     ok: true,
     topic: topicContext.title,
-    document: { loaded: documentState.loaded, file_name: documentState.fileName, pages: documentState.pages.length, error: documentState.error },
+    document: { loaded: documentState.loaded, source: documentPdfUrl ? "remote-url" : "local-path", url_configured: Boolean(documentPdfUrl), file_name: documentState.fileName, pages: documentState.pages.length, error: documentState.error },
     providers: { order: providerOrder(), gemini: configured("gemini"), openrouter: configured("openrouter") },
     database: { configured: Boolean(process.env.DATABASE_URL), ready: Boolean(dbPool && !dbInitError), error: dbInitError },
   });

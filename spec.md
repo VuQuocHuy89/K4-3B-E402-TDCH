@@ -43,7 +43,7 @@ Loại: [ ] Tối ưu tính năng có sẵn  [x] Tính năng mới
   1. Không xây lại toàn bộ giao diện VLearn.
   2. Không triển khai toàn bộ curriculum AI Engineer.
   3. Không xây hệ thống chứng chỉ hoặc thay thế giảng viên/TA.
-- Mức prototype nhắm tới: [ ] Sketch [ ] Mock [x] Working — CP3 chạy local end-to-end với tài liệu `Grokking Machine Learning.pdf`, diagnostic, AI analysis, roadmap, tutor và remediation. PDF được đọc từ đường dẫn local trong `server/.env`, không commit vào repo.
+- Mức prototype nhắm tới: [ ] Sketch [ ] Mock [x] Working — CP3 chạy local end-to-end với tài liệu `Grokking Machine Learning.pdf`, diagnostic, AI analysis, roadmap, tutor và remediation. PDF đọc từ đường dẫn local khi chạy dev hoặc từ `DOCUMENT_PDF_URL` HTTPS khi deploy; file không commit vào repo.
 - Automation: [ ] augment [x] conditional [ ] automate — AI đề xuất competency profile, knowledge gap và learning path; rule kiểm tra dữ liệu đầu vào, ngưỡng đánh giá và các luồng fallback.
 - §4b. Nguyên tắc đã áp dụng (≥4 — HAX/PAIR, xem guide):
   | Nguyên tắc | Áp cụ thể vào đâu trong prototype |
@@ -124,4 +124,4 @@ Kịch bản nhóm lo ngại nhất khi demo là AI trả về một roadmap có
 - File khảo sát không ghi thông tin để kiểm tra thành viên nhóm; điều kiện “23 người ngoài nhóm” cần được đội trưởng xác nhận khi nộp.
 - Validation với willing users chưa thực hiện; kế hoạch đã ghi ở §8 và sẽ ghi kết quả thật trong `validation/` khi triển khai.
 - Kết quả 20/20 là phép đo cấp hệ thống; chỉ 2/20 case được xử lý bằng AI live trong lượt chạy đã lưu, 18/20 case dùng deterministic fallback.
-- File PDF học liệu chưa được đưa lên Render; prototype CP3 chạy với tài liệu local khi đường dẫn PDF tồn tại. Đây là giới hạn triển khai, không được trình bày như đã hoàn tất trên cloud.
+- Production đã có cơ chế tải/cache PDF qua `DOCUMENT_PDF_URL`, nhưng Render vẫn cần được cấu hình một URL HTTPS tới file được cấp quyền. Khi chưa cấu hình biến này, health check sẽ báo `document.loaded=false`; không trình bày grounding PDF cloud là đã hoàn tất.

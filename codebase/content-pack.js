@@ -17,6 +17,11 @@ window.CONTENT_PACK = {
     duration: "118 phút nội dung cốt lõi",
     progress: 0,
     passMark: 80,
+    roadmapRef: {
+      label: "AI Engineer Roadmap · roadmap.sh",
+      url: "https://roadmap.sh/ai-engineer",
+      note: "Khung tham chiếu bên ngoài để mở rộng lộ trình; Pathwise không sao chép nội dung roadmap.",
+    },
   },
   sources: [
     { id: "GML-CH01", type: "PDF", label: "What is machine learning?", summary: "Khái niệm ML và cách chuyển dữ liệu thành dự đoán." },

@@ -23,6 +23,10 @@ services:
         value: openrouter/free
       - key: AI_TIMEOUT_MS
         value: "12000"
+      - key: DOCUMENT_PDF_URL
+        sync: false
+      - key: DOCUMENT_PDF_CACHE_PATH
+        value: /tmp/pathwise-document.pdf
 
 databases:
   - name: pathwise-db

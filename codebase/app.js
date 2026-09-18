@@ -12,6 +12,7 @@
   const isValidMinutes = (value) => Number.isInteger(Number(value)) && Number(value) >= 10 && Number(value) <= 240;
   const isValidTopic = (value) => String(value || "").trim().length >= 3 && String(value || "").trim().length <= 120;
   const API_BASE = String(window.PATHWISE_API_BASE || "").trim().replace(/\/+$/, "");
+  const ASSESSMENT_VERSION = 2;
   const AUTH_USERS_KEY = "pathwise-auth-users-v1";
   const AUTH_SESSION_KEY = "pathwise-auth-session-v1";
   const AUTH_TOKEN_KEY = "pathwise-auth-token-v1";
@@ -38,6 +39,7 @@
     diagnosticConfidence: {},
     diagnosticSubmitted: false,
     diagnosticSkipped: false,
+    assessmentVersion: ASSESSMENT_VERSION,
     assessmentQuestions: { diagnostic: [], mastery: {}, final: [] },
     assessmentMeta: { diagnostic: null, mastery: {}, final: null },
     aiAnalysis: null,
@@ -84,7 +86,7 @@
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
   defaultState.view = "setup";
-  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
   const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
   const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
   const learnerName = () => currentUser?.name || pack.learner.name;
@@ -133,6 +135,25 @@
     } catch {}
   };
   const resetInMemoryState = () => Object.assign(state, cloneData(defaultState));
+  const resetAssessmentState = () => {
+    state.assessmentVersion = ASSESSMENT_VERSION;
+    state.assessmentQuestions = { diagnostic: [], mastery: {}, final: [] };
+    state.assessmentMeta = { diagnostic: null, mastery: {}, final: null };
+    state.diagnosticIndex = 0;
+    state.diagnosticAnswers = {};
+    state.diagnosticConfidence = {};
+    state.diagnosticSubmitted = false;
+    state.diagnosticSkipped = false;
+    state.masteryIndex = 0;
+    state.masteryAnswers = {};
+    state.masterySubmitted = false;
+    state.finalIndex = 0;
+    state.finalAnswers = {};
+    state.finalSubmitted = false;
+    state.aiAnalysis = null;
+    state.agentMeta = null;
+    state.recommendedPath = [];
+  };
   const persistState = () => {
     try {
       const snapshot = Object.fromEntries(persistableState.map((key) => [key, state[key]]));
@@ -152,6 +173,7 @@
       const saved = JSON.parse(localStorage.getItem(stateStorageKey()) || "null");
       if (!saved || typeof saved !== "object") return;
       persistableState.forEach((key) => { if (saved[key] !== undefined) state[key] = saved[key]; });
+      if (saved.assessmentVersion !== ASSESSMENT_VERSION) resetAssessmentState();
       if (!state.assessmentQuestions || typeof state.assessmentQuestions !== "object") state.assessmentQuestions = { diagnostic: [], mastery: {}, final: [] };
       if (!Array.isArray(state.assessmentQuestions.diagnostic)) state.assessmentQuestions.diagnostic = [];
       if (!state.assessmentQuestions.mastery || typeof state.assessmentQuestions.mastery !== "object") state.assessmentQuestions.mastery = {};
@@ -224,6 +246,10 @@
   };
   const externalSourceLinks = (urls = []) => urls.map((url) => `<a class="source-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(new URL(url).hostname.replace(/^www\./, ""))} ${icon("arrow")}</a>`).join("");
   const statusBadge = (label, type = "neutral") => `<span class="status-badge status-${type}"><span class="status-badge-dot"></span>${escapeHtml(label)}</span>`;
+  const roadmapReferenceLink = (label = "Mở AI Engineer roadmap") => {
+    const reference = pack.topic.roadmapRef || { label: "AI Engineer Roadmap · roadmap.sh", url: "https://roadmap.sh/ai-engineer" };
+    return `<a class="roadmap-reference-link" href="${escapeHtml(reference.url)}" target="_blank" rel="noreferrer noopener">${icon("route")} ${escapeHtml(label)} ${icon("arrow")}</a>`;
+  };
 
   const renderAuth = () => {
     if (!authContainer) return;
@@ -370,7 +396,26 @@
     return pack.finalQuestions;
   };
 
-  const normalizeAssessmentQuestions = (questions) => (Array.isArray(questions) ? questions : []).map((question) => ({
+  const assessmentSeed = (value) => [...String(value || "")].reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0, 2166136261);
+  const shuffleAssessmentQuestion = (question) => {
+    if (question.optionsShuffled || !Array.isArray(question.options) || question.options.length !== 4) return question;
+    const correctIndex = Number(question.correctIndex);
+    if (!Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3) return question;
+    const entries = question.options.map((option, index) => ({ option, originalIndex: index }));
+    let seed = assessmentSeed(question.id || question.prompt);
+    for (let index = entries.length - 1; index > 0; index -= 1) {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      const swapIndex = seed % (index + 1);
+      [entries[index], entries[swapIndex]] = [entries[swapIndex], entries[index]];
+    }
+    return {
+      ...question,
+      options: entries.map((entry) => entry.option),
+      correctIndex: entries.findIndex((entry) => entry.originalIndex === correctIndex),
+      optionsShuffled: true,
+    };
+  };
+  const normalizeAssessmentQuestions = (questions) => (Array.isArray(questions) ? questions : []).map((question) => shuffleAssessmentQuestion({
     ...question,
     competencyId: question.competencyId || question.competency_id,
     sectionId: question.sectionId || question.section_id,
@@ -383,7 +428,7 @@
     const targetView = mode === "diagnostic" ? "diagnostic" : mode === "mastery" ? "mastery" : "assessment";
     state.view = loadingView;
     render();
-    const fallbackQuestions = fallbackQuestionsFor(mode, sectionId);
+    const fallbackQuestions = normalizeAssessmentQuestions(fallbackQuestionsFor(mode, sectionId));
     try {
       const response = await apiRequest("/api/learning/assessment", {
         mode,
@@ -442,7 +487,10 @@
       const response = await fetch(`${API_BASE}/api/session?session_key=${encodeURIComponent(cloudSessionKey)}`, { headers: authHeaders() });
       if (!response.ok) throw new Error("session_unavailable");
       const payload = await response.json();
-      if (currentUser?.id === userId && payload.state && typeof payload.state === "object") Object.assign(state, payload.state);
+      if (currentUser?.id === userId && payload.state && typeof payload.state === "object") {
+        Object.assign(state, payload.state);
+        if (payload.state.assessmentVersion !== ASSESSMENT_VERSION) resetAssessmentState();
+      }
     } catch {}
     cloudHydrated = true;
     render();
@@ -597,7 +645,7 @@
       </section>
       <div class="overview-bottom-grid">
         <article class="roadmap-preview panel-card"><div class="section-heading compact-heading"><div><p class="section-eyebrow">YOUR PATH</p><h2>Lộ trình cá nhân</h2></div><button class="link-button" type="button" data-view="roadmap">Mở đầy đủ ${icon("arrow")}</button></div><div class="mini-timeline">${pack.sections.map((section, index) => { const status = sectionState(section, index); return `<button class="mini-timeline-item ${status}" type="button" data-action="go-section" data-section-id="${section.id}"><span class="timeline-node">${status === "complete" ? icon("check") : section.number}</span><span><strong>${escapeHtml(section.title)}</strong><small>${status === "complete" ? "Đã hoàn thành" : status === "current" ? "Bước tiếp theo · " + section.duration : status === "next" ? "Sau khi pass section 01" : "Đang khóa"}</small></span>${status === "current" ? `<span class="mini-arrow">${icon("arrow")}</span>` : ""}</button>`; }).join("")}</div></article>
-        <article class="evidence-preview panel-card"><div class="panel-kicker-row"><span class="panel-kicker">SOURCE-GROUNDED</span>${statusBadge(`${pack.sources.length} sources mapped`, "info")}</div><h2>Quyết định học có căn cứ</h2><p>Pathwise dùng tài liệu có sẵn hoặc tìm thêm nguồn chính thống khi section chưa có học liệu phù hợp.</p><div class="source-list-compact">${pack.sources.slice(0, 3).map((source) => `<div class="source-row"><span class="source-row-icon">${icon("file")}</span><span><strong>${source.id}</strong><small>${escapeHtml(source.label)}</small></span></div>`).join("")}</div><button class="outline-button full-button" type="button" data-action="go-study">Mở learning package ${icon("arrow")}</button></article>
+        <article class="evidence-preview panel-card"><div class="panel-kicker-row"><span class="panel-kicker">SOURCE-GROUNDED</span>${statusBadge(`${pack.sources.length} sources mapped`, "info")}</div><h2>Quyết định học có căn cứ</h2><p>Pathwise dùng tài liệu có sẵn hoặc tìm thêm nguồn chính thống khi section chưa có học liệu phù hợp.</p><div class="source-list-compact">${pack.sources.slice(0, 3).map((source) => `<div class="source-row"><span class="source-row-icon">${icon("file")}</span><span><strong>${source.id}</strong><small>${escapeHtml(source.label)}</small></span></div>`).join("")}</div><button class="outline-button full-button" type="button" data-action="go-study">Mở learning package ${icon("arrow")}</button>${roadmapReferenceLink("Xem khung AI Engineer trên roadmap.sh")}</article>
       </div>`;
   };
 
@@ -678,7 +726,7 @@
     const agentStatus = state.agentMeta?.live ? statusBadge("AI agent live", "success") : statusBadge("Fallback an toàn", "neutral");
     return `
       ${pageHeader("DIAGNOSTIC · KẾT QUẢ", "Đây là điểm bắt đầu của lộ trình", "Kết quả được dùng để chọn thứ tự section. Bạn chưa cần học lại phần đã nắm được.", `<button class="outline-button compact-button" type="button" data-action="redo-diagnostic">Làm lại</button>`)}
-      <div class="diagnostic-result-grid"><article class="score-card panel-card"><div class="score-card-top"><div class="score-circle"><strong>${score.percent}</strong><span>%</span></div><div><span class="panel-kicker">INITIAL SIGNAL</span><h2>${score.percent >= 80 ? "Nền tảng đang khá chắc" : "Đã tìm thấy điểm cần ưu tiên"}</h2><p>${score.correct}/${score.total} câu đúng · confidence được thu thập theo từng câu.</p></div></div><div class="result-meter"><div class="progress-bar"><i style="width:${score.percent}%"></i></div><span>Diagnostic không phải mastery test</span></div></article><article class="profile-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">LEARNING PROFILE</span>${agentStatus}</div><h2>Ưu tiên theo gap</h2><p>${escapeHtml(analysis.reason || (gaps.length ? `Hệ thống đưa ${gaps.length} tín hiệu cần ôn lên trước.` : "Bạn có thể đi thẳng tới section tiếp theo."))}</p><div class="profile-tags">${analysis.competency_gaps.slice(0, 3).map((gap) => `<span>${escapeHtml(getCompetency(gap.competency_id).title)}</span>`).join("")}</div></article></div>
+      <div class="diagnostic-result-grid"><article class="score-card panel-card"><div class="score-card-top"><div class="score-circle"><strong>${score.percent}</strong><span>%</span></div><div><span class="panel-kicker">INITIAL SIGNAL</span><h2>${score.percent >= 80 ? "Nền tảng đang khá chắc" : "Đã tìm thấy điểm cần ưu tiên"}</h2><p>${score.correct}/${score.total} câu đúng · confidence được thu thập theo từng câu.</p></div></div><div class="result-meter"><div class="progress-bar"><i style="width:${score.percent}%"></i></div><span>Diagnostic không phải mastery test</span></div></article><article class="profile-card panel-card"><div class="panel-kicker-row"><span class="panel-kicker">LEARNING PROFILE</span>${agentStatus}</div><h2>Ưu tiên theo gap</h2><p>${escapeHtml(analysis.reason || (gaps.length ? `Hệ thống đưa ${gaps.length} tín hiệu cần ôn lên trước.` : "Bạn có thể đi thẳng tới section tiếp theo."))}</p><div class="profile-tags">${analysis.competency_gaps.slice(0, 3).map((gap) => `<span>${escapeHtml(getCompetency(gap.competency_id).title)}</span>`).join("")}</div>${roadmapReferenceLink("Đối chiếu với AI Engineer roadmap")}</article></div>
       <div class="section-heading result-heading"><div><p class="section-eyebrow">WHAT WE FOUND</p><h2>Tín hiệu từ bài làm</h2></div><span class="muted-label">Source-linked · ${gaps.length} gap cần xử lý</span></div>
       <div class="finding-list">${questions.map((question, index) => { const isCorrect = state.diagnosticAnswers[question.id] === question.correctIndex; return `<article class="finding-item"><span class="finding-number ${isCorrect ? "is-good" : "is-gap"}">${isCorrect ? icon("check") : String(index + 1).padStart(2, "0")}</span><div><div class="finding-title"><strong>${escapeHtml(question.label)}</strong>${statusBadge(isCorrect ? "Đã nắm tín hiệu" : "Cần ôn", isCorrect ? "success" : "warning")}</div><p>${isCorrect ? "Câu trả lời đang phù hợp với competency. Không đưa vào phần ưu tiên đầu tiên." : escapeHtml(question.explanation)}</p><div class="source-row-inline">${sourceChips(question.sourceIds)}</div></div></article>`; }).join("")}</div>
       <div class="result-cta panel-card"><div><span class="panel-kicker">NEXT BEST ACTION</span><h2>Đi vào lộ trình cá nhân</h2><p>Ưu tiên kế tiếp: ${escapeHtml(nextSection.title)}. Mỗi section có mastery test riêng với ngưỡng pass 80%.</p></div><button class="primary-button" type="button" data-view="roadmap">Xem roadmap ${icon("arrow")}</button></div>`;
@@ -691,7 +739,7 @@
     return `
     ${pageHeader("LEARNING ROADMAP", "Lộ trình của bạn", "Thứ tự học được sắp theo gap hiện tại. Sau mỗi mastery test, Pathwise sẽ cập nhật section tiếp theo.", `<div class="time-plan-control"><label for="time-plan-input">Thời gian hôm nay</label><div class="time-plan-input"><input id="time-plan-input" type="number" min="10" max="240" step="1" inputmode="numeric" value="${escapeHtml(state.timePlan)}" aria-label="Số phút học hôm nay" /><span>phút</span><button type="button" data-action="save-time-plan">Lưu</button></div><small>10–240 phút</small></div>`)}
     <div class="roadmap-summary"><div><span class="summary-label">PERSONALISED PLAN</span><h2>${state.diagnosticSkipped ? "Bắt đầu từ nền tảng" : "Ôn gap trước, học mới sau"}</h2><p>${planSource}</p></div><div class="summary-stats"><div><strong>${gapCount}</strong><span>${state.diagnosticSkipped ? "gap chưa đánh giá" : "gap ưu tiên"}</span></div><div><strong>${state.timePlan}</strong><span>phút dự kiến</span></div><div><strong>80%</strong><span>ngưỡng pass</span></div></div></div>
-    <div class="roadmap-layout"><section class="roadmap-timeline"><div class="timeline-header"><div><p class="section-eyebrow">YOUR SEQUENCE</p><h2>Thứ tự section</h2></div><span class="muted-label">Cập nhật sau mỗi test</span></div>${pack.sections.map((section, index) => { const status = sectionState(section, index); const comp = getCompetency(section.competencyId); const canOpen = status === "current" || status === "complete"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="roadmap-item ${status}"><div class="roadmap-rail"><span class="roadmap-node">${status === "complete" ? icon("check") : section.number}</span>${index < pack.sections.length - 1 ? "<i></i>" : ""}</div><div class="roadmap-content"><div class="roadmap-item-top"><div><span class="item-eyebrow">${escapeHtml(section.eyebrow)}</span><h3>${escapeHtml(section.title)} ${isRecommended ? statusBadge("AI ưu tiên", "warning") : ""}</h3></div>${statusBadge(status === "complete" ? "Đã pass" : status === "current" ? "Đang ưu tiên" : status === "next" ? "Tiếp theo" : "Đang khóa", status === "complete" ? "success" : status === "current" ? "warning" : status === "next" ? "info" : "locked")}</div><p>${escapeHtml(section.description)}</p><div class="roadmap-item-meta"><span>${icon("clock")} ${section.duration}</span><span>${icon("pulse")} ${comp.mastery}% mastery hiện tại</span><span>${icon("file")} ${section.sourceIds.length} sources</span></div>${canOpen ? `<button class="outline-button compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại section" : "Bắt đầu section"} ${icon("arrow")}</button>` : `<span class="locked-note">${icon("shield")} Pass section trước để mở</span>`}</div></article>`; }).join("")}</section><aside class="roadmap-aside"><div class="aside-card rationale-card"><span class="aside-label">WHY THIS ORDER?</span><h3>Hệ thống đang ưu tiên gì?</h3><div class="rationale-row"><span class="rationale-icon coral">${icon("pulse")}</span><span><strong>${escapeHtml(prioritySection.title)}</strong><small>Được chọn từ gap và prerequisite hiện tại.</small></span></div><div class="rationale-row"><span class="rationale-icon indigo">${icon("route")}</span><span><strong>Mastery gate</strong><small>Chỉ mở section tiếp theo khi đạt 80%.</small></span></div><div class="rationale-row"><span class="rationale-icon mint">${icon("clock")}</span><span><strong>Time-boxed session</strong><small>Plan hôm nay: ${state.timePlan} phút, có thể tạm dừng.</small></span></div></div><div class="aside-card evidence-card-small"><span class="aside-label">EVIDENCE BASIS</span><p>Điểm hổng được đối chiếu với chapter trong PDF đã nạp.</p><div class="source-row-inline">${sourceChips(pack.sources.slice(0, 3).map((source) => source.id))}</div><button class="link-button" type="button" data-view="tutor">Kiểm tra với tutor ${icon("arrow")}</button></div></aside></div>`;
+    <div class="roadmap-layout"><section class="roadmap-timeline"><div class="timeline-header"><div><p class="section-eyebrow">YOUR SEQUENCE</p><h2>Thứ tự section</h2></div><span class="muted-label">Cập nhật sau mỗi test</span></div>${pack.sections.map((section, index) => { const status = sectionState(section, index); const comp = getCompetency(section.competencyId); const canOpen = status === "current" || status === "complete"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="roadmap-item ${status}"><div class="roadmap-rail"><span class="roadmap-node">${status === "complete" ? icon("check") : section.number}</span>${index < pack.sections.length - 1 ? "<i></i>" : ""}</div><div class="roadmap-content"><div class="roadmap-item-top"><div><span class="item-eyebrow">${escapeHtml(section.eyebrow)}</span><h3>${escapeHtml(section.title)} ${isRecommended ? statusBadge("AI ưu tiên", "warning") : ""}</h3></div>${statusBadge(status === "complete" ? "Đã pass" : status === "current" ? "Đang ưu tiên" : status === "next" ? "Tiếp theo" : "Đang khóa", status === "complete" ? "success" : status === "current" ? "warning" : status === "next" ? "info" : "locked")}</div><p>${escapeHtml(section.description)}</p><div class="roadmap-item-meta"><span>${icon("clock")} ${section.duration}</span><span>${icon("pulse")} ${comp.mastery}% mastery hiện tại</span><span>${icon("file")} ${section.sourceIds.length} sources</span></div>${canOpen ? `<button class="outline-button compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại section" : "Bắt đầu section"} ${icon("arrow")}</button>` : `<span class="locked-note">${icon("shield")} Pass section trước để mở</span>`}</div></article>`; }).join("")}</section><aside class="roadmap-aside"><div class="aside-card rationale-card"><span class="aside-label">WHY THIS ORDER?</span><h3>Hệ thống đang ưu tiên gì?</h3><div class="rationale-row"><span class="rationale-icon coral">${icon("pulse")}</span><span><strong>${escapeHtml(prioritySection.title)}</strong><small>Được chọn từ gap và prerequisite hiện tại.</small></span></div><div class="rationale-row"><span class="rationale-icon indigo">${icon("route")}</span><span><strong>Mastery gate</strong><small>Chỉ mở section tiếp theo khi đạt 80%.</small></span></div><div class="rationale-row"><span class="rationale-icon mint">${icon("clock")}</span><span><strong>Time-boxed session</strong><small>Plan hôm nay: ${state.timePlan} phút, có thể tạm dừng.</small></span></div></div><div class="aside-card evidence-card-small"><span class="aside-label">EVIDENCE BASIS</span><p>Điểm hổng được đối chiếu với chapter trong PDF đã nạp.</p><div class="source-row-inline">${sourceChips(pack.sources.slice(0, 3).map((source) => source.id))}</div>${roadmapReferenceLink("Mở tham chiếu AI Engineer") }<button class="link-button" type="button" data-view="tutor">Kiểm tra với tutor ${icon("arrow")}</button></div></aside></div>`;
   };
 
   const renderLessonDepth = (section, studyPackage) => {

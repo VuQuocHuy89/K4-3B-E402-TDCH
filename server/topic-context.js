@@ -12,6 +12,14 @@ const sources = [
   { id: "GML-CH13", label: "Putting it all in practice", chapter: "Chapter 13", keywords: ["data engineering", "machine learning", "real-life", "practice"], summary: "Một ví dụ thực tế kết nối data engineering và machine learning." },
 ];
 
+// Chỉ lưu liên kết tham chiếu bên ngoài; không sao chép nội dung roadmap.sh vào repo.
+const roadmapReference = {
+  label: "AI Engineer Roadmap · roadmap.sh",
+  url: "https://roadmap.sh/ai-engineer",
+  provider: "roadmap.sh",
+  note: "Khung tham chiếu bên ngoài để mở rộng lộ trình AI Engineer; Pathwise không tái phân phối nội dung roadmap.",
+};
+
 const sections = [
   { id: "section-ml-foundations", number: "01", title: "ML foundations & problem framing", eyebrow: "NỀN TẢNG", duration: 18, prerequisite: null, sourceIds: ["GML-CH01"] },
   { id: "section-learning-types", number: "02", title: "Learning types & data", eyebrow: "ĐẶT BÀI TOÁN", competencyId: "learning-types", duration: 18, prerequisite: "section-ml-foundations", sourceIds: ["GML-CH02"] },
@@ -43,11 +51,12 @@ const diagnosticQuestions = [
 ];
 
 module.exports = {
-  topicContext: { topicId: "grokking-machine-learning", title: "Machine Learning Foundations", documentName: "Grokking Machine Learning", sources, sections, competencies },
+  topicContext: { topicId: "grokking-machine-learning", title: "Machine Learning Foundations", documentName: "Grokking Machine Learning", sources, sections, competencies, roadmapReference },
   sources,
   sections,
   competencies,
   diagnosticQuestions,
+  roadmapReference,
   sourceIds: new Set(sources.map((item) => item.id)),
   sectionIds: new Set(sections.map((item) => item.id)),
   competencyIds: new Set(competencies.map((item) => item.id)),
