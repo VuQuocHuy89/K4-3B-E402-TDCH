@@ -23,11 +23,21 @@ const savedState = {
   tutorMessages: [],
 };
 
+const smokeUser = { id: "smoke-user", name: "Smoke Test", email: "smoke@example.com", passwordHash: "fixture" };
 const localStorage = {
   value: JSON.stringify(savedState),
-  getItem() { return this.value; },
-  setItem(_key, value) { this.value = value; },
-  removeItem() { this.value = null; },
+  getItem(key) {
+    if (key === "pathwise-auth-users-v1") return JSON.stringify([smokeUser]);
+    if (key === "pathwise-auth-session-v1") return smokeUser.id;
+    if (key === "pathwise-learning-session-v5:user:smoke-user" || key === "pathwise-learning-session-v5") return this.value;
+    return null;
+  },
+  setItem(key, value) {
+    if (key === "pathwise-learning-session-v5:user:smoke-user" || key === "pathwise-learning-session-v5") this.value = value;
+  },
+  removeItem(key) {
+    if (key === "pathwise-learning-session-v5:user:smoke-user" || key === "pathwise-learning-session-v5") this.value = null;
+  },
 };
 const classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
 const stubElement = {
@@ -68,13 +78,15 @@ const context = vm.createContext({ window, document, localStorage, console, setT
 vm.runInContext(fs.readFileSync(path.join(root, "codebase", "content-pack.js"), "utf8"), context, { filename: "content-pack.js" });
 vm.runInContext(fs.readFileSync(path.join(root, "codebase", "app.js"), "utf8"), context, { filename: "app.js" });
 
-const html = viewContainer.innerHTML;
-assert.match(html, /Hành trình AI Engineer của bạn/);
-assert.equal((html.match(/class="journey-checkpoint/g) || []).length, 7, "six milestones plus the final trophy");
-assert.equal((html.match(/journey-micro-point is-complete/g) || []).length, 3, "completed section marks three green micro points");
-assert.match(html, /class="journey-avatar[^>]*data-stop="1"/, "avatar advances to the second milestone");
-assert.equal((html.match(/class="reward-art"/g) || []).length, 6, "every major milestone has reward art");
-assert.match(html, /Cúp Machine Learning Foundations/);
-assert.match(html, /data-action="preview-journey"/);
+setTimeout(() => {
+  const html = viewContainer.innerHTML;
+  assert.match(html, /Hành trình Machine Learning Foundations của bạn/);
+  assert.equal((html.match(/class="journey-checkpoint/g) || []).length, 7, "six milestones plus the final trophy");
+  assert.equal((html.match(/journey-micro-point is-complete/g) || []).length, 3, "completed section marks three green micro points");
+  assert.match(html, /class="journey-avatar[^>]*data-stop="1"/, "avatar advances to the second milestone");
+  assert.equal((html.match(/class="reward-art"/g) || []).length, 6, "every major milestone has reward art");
+  assert.match(html, /Cúp Machine Learning Foundations/);
+  assert.match(html, /data-action="preview-journey"/);
 
-console.log("roadmap smoke: ok · 6 milestones · 18 micro points · avatar stop 1 · trophy rendered");
+  console.log("roadmap smoke: ok · 6 milestones · 18 micro points · avatar stop 1 · trophy rendered");
+}, 0);

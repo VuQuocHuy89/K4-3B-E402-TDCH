@@ -66,16 +66,21 @@
             </button>
           </div>
           <div class="sidebar-topic">
-          <button class="topic-switcher" type="button" data-action="topic-menu" aria-label="Thiết lập learning path" title="Thiết lập learning path">
+          <button class="topic-switcher" type="button" data-action="open-current-path" aria-label="Mở path đang học" title="Mở path đang học">
             <span class="topic-switcher-icon" aria-hidden="true">01</span>
-            <span><small>CHƯA THIẾT LẬP</small><strong>Thiết lập learning path</strong></span>
+            <span><small>ĐANG HỌC</small><strong>Path hiện tại</strong></span>
             <span class="chevron" aria-hidden="true">⌄</span>
+          </button>
+          <button class="new-path-tile" type="button" data-action="new-path" aria-label="Tạo learning path mới" title="Tạo learning path mới">
+            <span class="new-path-icon" data-icon="plus" aria-hidden="true"></span>
+            <span><small>NEW PATH</small><strong>Tạo path mới</strong></span>
+            <span class="new-path-arrow" aria-hidden="true">→</span>
           </button>
           </div>
           <nav class="primary-nav" aria-label="Các khu vực học tập">
             <p class="nav-label">WORKSPACE</p>
             <button class="nav-item is-active" type="button" data-view="overview"><span class="nav-icon" data-icon="grid"></span><span>Tổng quan</span></button>
-            <button class="nav-item" type="button" data-view="diagnostic"><span class="nav-icon" data-icon="pulse"></span><span>Diagnostic</span><span class="nav-count">3</span></button>
+            <button class="nav-item" type="button" data-view="diagnostic"><span class="nav-icon" data-icon="pulse"></span><span>Diagnostic</span><span class="nav-count" hidden></span></button>
             <button class="nav-item" type="button" data-view="roadmap"><span class="nav-icon" data-icon="route"></span><span>Learning roadmap</span></button>
             <button class="nav-item" type="button" data-view="study"><span class="nav-icon" data-icon="book"></span><span>Study session</span></button>
             <button class="nav-item" type="button" data-view="tutor"><span class="nav-icon" data-icon="spark"></span><span>AI tutor</span><span class="nav-live">BETA</span></button>
@@ -89,7 +94,6 @@
           <button class="nav-item sidebar-notification" type="button" data-action="notification" aria-label="Thông báo" title="Thông báo">
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M18 9.5a6 6 0 0 0-12 0c0 7-3 7-3 8.5h18C21 16.5 18 16.5 18 9.5ZM10 21h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span class="sidebar-text">Thông báo</span>
-            <span class="notification-dot" aria-hidden="true"></span>
           </button>
             <button class="sidebar-account" type="button" data-action="profile" aria-label="Hồ sơ của Vũ Quốc Huy" title="Hồ sơ của Vũ Quốc Huy">
               <span class="avatar">H</span><span class="account-details"><strong>Vũ Quốc Huy</strong><small>K4 · 3B · Learner</small></span><span class="account-more" aria-hidden="true">···</span>
