@@ -10,7 +10,13 @@
   </head>
   <body>
     <a class="skip-link" href="#main-content">Bỏ qua đến nội dung chính</a>
-    <div class="app-shell">
+    <div id="auth-gate" class="auth-gate" hidden>
+      <div class="auth-card" role="main">
+        <div class="auth-brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M5 5.5h9.5A4.5 4.5 0 0 1 19 10v8.5H9.5A4.5 4.5 0 0 1 5 14V5.5Z" stroke="currentColor" stroke-width="1.8"/><path d="M8 9.5h6.5M8 13h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span><strong>Pathwise</strong><small>Adaptive learning workspace</small></span></div>
+        <div id="auth-container"></div>
+      </div>
+    </div>
+    <div id="app-shell" class="app-shell" hidden>
       <div class="app-body">
         <aside id="workspace-sidebar" class="sidebar" aria-label="Điều hướng workspace">
           <div class="sidebar-heading">
@@ -43,6 +49,7 @@
           <div class="sidebar-bottom">
             <div class="streak-card" hidden><div class="streak-top"><span class="streak-icon" data-icon="flame"></span><strong>Phiên học đầu tiên</strong></div><span>Hoàn thành một section để bắt đầu ghi nhận tiến độ.</span><div class="streak-days"><i class="is-today">Hôm nay</i><i>Ngày 2</i><i>Ngày 3</i></div></div>
             <button class="sidebar-link" type="button" data-action="reset"><span data-icon="refresh"></span><span class="sidebar-text">Đặt lại demo</span></button>
+            <button class="sidebar-link" type="button" data-action="logout"><span data-icon="logout"></span><span class="sidebar-text">Đăng xuất</span></button>
           <span class="environment-badge" id="environment-badge" data-live="false"><span class="status-dot" aria-hidden="true"></span><span class="environment-label">Đang kết nối AI...</span></span>
           <button class="nav-item sidebar-notification" type="button" data-action="notification" aria-label="Thông báo" title="Thông báo">
             <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M18 9.5a6 6 0 0 0-12 0c0 7-3 7-3 8.5h18C21 16.5 18 16.5 18 9.5ZM10 21h4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>

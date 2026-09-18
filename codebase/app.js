@@ -3,24 +3,25 @@
 
   const pack = window.CONTENT_PACK;
   const viewContainer = document.querySelector("#view-container");
+  const appShell = document.querySelector("#app-shell");
+  const authGate = document.querySelector("#auth-gate");
+  const authContainer = document.querySelector("#auth-container");
   const toast = document.querySelector("#toast");
   const liveRegion = document.querySelector("#live-region");
   const topicSuggestions = ["Machine Learning", "Python cho AI Engineer", "LLM và RAG", "AI Agents"];
   const isValidMinutes = (value) => Number.isInteger(Number(value)) && Number(value) >= 10 && Number(value) <= 240;
   const isValidTopic = (value) => String(value || "").trim().length >= 3 && String(value || "").trim().length <= 120;
   const API_BASE = String(window.PATHWISE_API_BASE || "").trim().replace(/\/+$/, "");
-  const CLOUD_SESSION_KEY = "pathwise-cloud-session-key-v1";
-  const cloudSessionKey = (() => {
-    try {
-      const existing = localStorage.getItem(CLOUD_SESSION_KEY);
-      if (existing) return existing;
-      const generated = window.crypto?.randomUUID?.() || `demo-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      localStorage.setItem(CLOUD_SESSION_KEY, generated);
-      return generated;
-    } catch {
-      return "demo-session";
-    }
-  })();
+  const AUTH_USERS_KEY = "pathwise-auth-users-v1";
+  const AUTH_SESSION_KEY = "pathwise-auth-session-v1";
+  const LEGACY_STORAGE_KEY = "pathwise-learning-session-v5";
+  const LEGACY_MIGRATION_KEY = "pathwise-auth-legacy-migrated-v1";
+  const USER_STORAGE_PREFIX = "pathwise-learning-session-v5:user:";
+  let currentUser = null;
+  let authMode = "login";
+  let authNotice = "";
+  let authNoticeIsError = false;
+  let cloudSessionKey = "";
   let cloudHydrated = !API_BASE;
   let cloudSaveTimer = null;
 
@@ -76,23 +77,71 @@
   let focusInterval = null;
   let focusRemainingSeconds = 0;
 
-  const STORAGE_KEY = "pathwise-learning-session-v5";
+  const cloneData = (value) => JSON.parse(JSON.stringify(value));
+  const defaultState = cloneData(state);
+  defaultState.view = "setup";
   const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
+  const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
+  const learnerName = () => currentUser?.name || pack.learner.name;
+  const readUsers = () => {
+    try {
+      const users = JSON.parse(localStorage.getItem(AUTH_USERS_KEY) || "[]");
+      return Array.isArray(users) ? users.filter((user) => user && user.id && user.email && user.passwordHash) : [];
+    } catch { return []; }
+  };
+  const writeUsers = (users) => {
+    try { localStorage.setItem(AUTH_USERS_KEY, JSON.stringify(users)); return true; } catch { return false; }
+  };
+  const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+  const hashPassword = async (password) => {
+    const value = String(password || "");
+    if (window.crypto?.subtle && window.TextEncoder) {
+      const buffer = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+      return Array.from(new Uint8Array(buffer)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+    return value;
+  };
+  const randomId = () => window.crypto?.randomUUID?.() || `user-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const setAuthSession = (userId) => { try { localStorage.setItem(AUTH_SESSION_KEY, userId); } catch {} };
+  const clearAuthSession = () => { try { localStorage.removeItem(AUTH_SESSION_KEY); } catch {} };
+  const getSessionUser = () => {
+    try {
+      const id = localStorage.getItem(AUTH_SESSION_KEY);
+      return readUsers().find((user) => user.id === id) || null;
+    } catch { return null; }
+  };
+  const migrateLegacyState = (userId) => {
+    try {
+      if (localStorage.getItem(LEGACY_MIGRATION_KEY)) return;
+      const key = `${USER_STORAGE_PREFIX}${userId}`;
+      if (!localStorage.getItem(key)) {
+        const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+        if (legacy) {
+          localStorage.setItem(key, legacy);
+          localStorage.setItem(LEGACY_MIGRATION_KEY, userId);
+        }
+      }
+    } catch {}
+  };
+  const resetInMemoryState = () => Object.assign(state, cloneData(defaultState));
   const persistState = () => {
     try {
       const snapshot = Object.fromEntries(persistableState.map((key) => [key, state[key]]));
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(snapshot));
-      if (API_BASE && cloudHydrated) {
+      if (currentUser) localStorage.setItem(stateStorageKey(), JSON.stringify(snapshot));
+      if (currentUser && API_BASE && cloudHydrated) {
         window.clearTimeout(cloudSaveTimer);
+        const sessionKey = cloudSessionKey;
         cloudSaveTimer = window.setTimeout(() => {
-          fetch(`${API_BASE}/api/session`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_key: cloudSessionKey, state: snapshot }) }).catch(() => {});
+          fetch(`${API_BASE}/api/session`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ session_key: sessionKey, state: snapshot }) }).catch(() => {});
         }, 600);
       }
     } catch {}
   };
   const restoreState = () => {
     try {
-      const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+      resetInMemoryState();
+      const saved = JSON.parse(localStorage.getItem(stateStorageKey()) || "null");
       if (!saved || typeof saved !== "object") return;
       persistableState.forEach((key) => { if (saved[key] !== undefined) state[key] = saved[key]; });
       if (!pack.sections.some((section) => section.id === state.selectedSectionId)) state.selectedSectionId = pack.sections[0].id;
@@ -121,6 +170,7 @@
     shield: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M12 3.5 19 6v5.25c0 4.25-2.65 7.65-7 9.25-4.35-1.6-7-5-7-9.25V6l7-2.5Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="m8.5 12 2.2 2.2 4.8-4.8" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
     menu: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    logout: '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M10 5H6.5A1.5 1.5 0 0 0 5 6.5v11A1.5 1.5 0 0 0 6.5 19H10M14 8l4 4-4 4M18 12H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   };
 
   const escapeHtml = (value) => String(value)
@@ -149,6 +199,90 @@
   };
   const externalSourceLinks = (urls = []) => urls.map((url) => `<a class="source-link" href="${escapeHtml(url)}" target="_blank" rel="noreferrer noopener">${escapeHtml(new URL(url).hostname.replace(/^www\./, ""))} ${icon("arrow")}</a>`).join("");
   const statusBadge = (label, type = "neutral") => `<span class="status-badge status-${type}"><span class="status-badge-dot"></span>${escapeHtml(label)}</span>`;
+
+  const renderAuth = () => {
+    if (!authContainer) return;
+    const registerMode = authMode === "register";
+    authContainer.innerHTML = `<div class="auth-heading"><h1>${registerMode ? "Tạo tài khoản Pathwise" : "Chào mừng trở lại"}</h1><p>${registerMode ? "Đăng ký để lưu riêng mục tiêu, tiến độ và lịch sử học của bạn." : "Đăng nhập để tiếp tục learning path của bạn."}</p></div><form id="auth-form" class="auth-form" novalidate>${registerMode ? `<div class="auth-field"><label for="auth-name">Tên hiển thị</label><input id="auth-name" name="name" type="text" autocomplete="name" placeholder="Ví dụ: Nguyễn Minh Anh" required /></div>` : ""}<div class="auth-field"><label for="auth-email">Email</label><input id="auth-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required /></div><div class="auth-field"><label for="auth-password">Mật khẩu</label><input id="auth-password" name="password" type="password" autocomplete="${registerMode ? "new-password" : "current-password"}" placeholder="Tối thiểu 6 ký tự" required /></div>${registerMode ? `<div class="auth-field"><label for="auth-confirm-password">Xác nhận mật khẩu</label><input id="auth-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" placeholder="Nhập lại mật khẩu" required /></div>` : ""}<button class="primary-button auth-submit" type="submit">${registerMode ? "Đăng ký tài khoản" : "Đăng nhập"} ${icon("arrow")}</button></form>${authNotice ? `<p class="auth-message ${authNoticeIsError ? "is-error" : ""}" role="status">${escapeHtml(authNotice)}</p>` : ""}<p class="auth-switch">${registerMode ? "Đã có tài khoản?" : "Chưa có tài khoản?"} <button type="button" data-auth-action="switch">${registerMode ? "Đăng nhập" : "Đăng ký ngay"}</button></p><p class="auth-hint">Dữ liệu learning path được lưu riêng theo tài khoản trên thiết bị này.</p>`;
+    const firstField = authContainer.querySelector("input");
+    window.setTimeout(() => firstField?.focus(), 0);
+  };
+
+  const showAuth = (mode = "login", notice = "", isError = false) => {
+    authMode = mode;
+    authNotice = notice;
+    authNoticeIsError = isError;
+    if (authGate) authGate.hidden = false;
+    if (appShell) appShell.hidden = true;
+    document.body.classList.add("is-authenticated-out");
+    renderAuth();
+  };
+
+  const updateAccountUi = () => {
+    if (!currentUser) return;
+    document.querySelectorAll(".sidebar-account .account-details strong").forEach((element) => { element.textContent = learnerName(); });
+    document.querySelectorAll(".sidebar-account .account-details small").forEach((element) => { element.textContent = currentUser.email; });
+    document.querySelectorAll(".sidebar-account .avatar").forEach((element) => { element.textContent = userInitial(); });
+    const account = document.querySelector(".sidebar-account");
+    if (account) { account.setAttribute("aria-label", `Hồ sơ của ${learnerName()}`); account.title = `Hồ sơ của ${learnerName()}`; }
+    document.querySelectorAll(".message-avatar").forEach((element) => { if (element.textContent.trim() === "H") element.textContent = userInitial(); });
+  };
+
+  const showAppForUser = async (user) => {
+    currentUser = user;
+    cloudSessionKey = `pathwise-cloud-user-${user.id}`;
+    cloudHydrated = !API_BASE;
+    setAuthSession(user.id);
+    migrateLegacyState(user.id);
+    restoreState();
+    if (authGate) authGate.hidden = true;
+    if (appShell) appShell.hidden = false;
+    document.body.classList.remove("is-authenticated-out");
+    render();
+    refreshEnvironmentStatus();
+    if (API_BASE) await hydrateCloudState();
+  };
+
+  const logout = () => {
+    persistState();
+    window.clearTimeout(cloudSaveTimer);
+    currentUser = null;
+    cloudSessionKey = "";
+    cloudHydrated = !API_BASE;
+    resetInMemoryState();
+    clearAuthSession();
+    window.history.replaceState(null, "", "#setup");
+    showAuth("login", "Bạn đã đăng xuất. Đăng nhập để tiếp tục.");
+  };
+
+  const handleAuthSubmit = async (event) => {
+    event.preventDefault();
+    if (authContainer?.querySelector("button[type='submit']")?.disabled) return;
+    const form = event.target;
+    const data = new FormData(form);
+    const email = normalizeEmail(data.get("email"));
+    const password = String(data.get("password") || "");
+    const name = String(data.get("name") || "").trim();
+    const confirmPassword = String(data.get("confirmPassword") || "");
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) { showAuth(authMode, "Hãy nhập email hợp lệ.", true); return; }
+    if (password.length < 6) { showAuth(authMode, "Mật khẩu cần có ít nhất 6 ký tự.", true); return; }
+    const users = readUsers();
+    const passwordHash = await hashPassword(password);
+    if (authMode === "register") {
+      if (name.length < 2) { showAuth("register", "Hãy nhập tên hiển thị.", true); return; }
+      if (password !== confirmPassword) { showAuth("register", "Mật khẩu xác nhận chưa khớp.", true); return; }
+      if (users.some((user) => normalizeEmail(user.email) === email)) { showAuth("login", "Email này đã đăng ký. Hãy đăng nhập.", true); document.querySelector("#auth-email")?.setAttribute("value", email); return; }
+      const user = { id: randomId(), name, email, passwordHash, createdAt: new Date().toISOString() };
+      if (!writeUsers([...users, user])) { showAuth("register", "Không thể lưu tài khoản trên thiết bị này.", true); return; }
+      migrateLegacyState(user.id);
+      showAuth("login", "Đăng ký thành công. Hãy đăng nhập để tiếp tục.");
+      return;
+    }
+    const user = users.find((candidate) => normalizeEmail(candidate.email) === email);
+    if (!user) { showAuth("login", "Tài khoản chưa đăng ký. Hãy tạo tài khoản trước.", true); return; }
+    if (user.passwordHash !== passwordHash) { showAuth("login", "Email hoặc mật khẩu không đúng.", true); return; }
+    await showAppForUser(user);
+  };
 
   const showToast = (message) => {
     toast.textContent = message;
@@ -181,12 +315,13 @@
   };
 
   const hydrateCloudState = async () => {
-    if (!API_BASE) return;
+    if (!API_BASE || !currentUser || !cloudSessionKey) return;
+    const userId = currentUser.id;
     try {
       const response = await fetch(`${API_BASE}/api/session?session_key=${encodeURIComponent(cloudSessionKey)}`);
       if (!response.ok) throw new Error("session_unavailable");
       const payload = await response.json();
-      if (payload.state && typeof payload.state === "object") Object.assign(state, payload.state);
+      if (currentUser?.id === userId && payload.state && typeof payload.state === "object") Object.assign(state, payload.state);
     } catch {}
     cloudHydrated = true;
     render();
@@ -325,7 +460,7 @@
     const nextAction = diagnosticDone ? "Tiếp tục section" : "Bắt đầu diagnostic";
     const nextActionName = diagnosticDone ? "go-study" : "start-diagnostic";
     return `
-      ${pageHeader("LEARNING PATH · AI ENGINEER", `Chào ${escapeHtml(pack.learner.name)}, bắt đầu đúng nền tảng.`, `Mục tiêu của bạn: <strong>${escapeHtml(activeTopicTitle())}</strong>. Pathwise dùng mục tiêu, ${state.diagnosticSkipped ? "mức bắt đầu từ số 0" : "diagnostic"} và tài liệu ${escapeHtml(pack.topic.documentName)} để sắp xếp bước học phù hợp.`, `<button class="secondary-button compact-button" type="button" data-action="topic-menu">${icon("route")} Sửa mục tiêu <span class="chevron">⌄</span></button>`)}
+      ${pageHeader("LEARNING PATH · AI ENGINEER", `Chào ${escapeHtml(learnerName())}, bắt đầu đúng nền tảng.`, `Mục tiêu của bạn: <strong>${escapeHtml(activeTopicTitle())}</strong>. Pathwise dùng mục tiêu, ${state.diagnosticSkipped ? "mức bắt đầu từ số 0" : "diagnostic"} và tài liệu ${escapeHtml(pack.topic.documentName)} để sắp xếp bước học phù hợp.`, `<button class="secondary-button compact-button" type="button" data-action="topic-menu">${icon("route")} Sửa mục tiêu <span class="chevron">⌄</span></button>`)}
       <div class="overview-top-grid">
           <article class="mastery-hero panel-card">
           <div class="panel-kicker-row"><span class="panel-kicker">TIẾN ĐỘ CHỦ ĐỀ</span>${statusBadge("Đang học", "success")}</div>
@@ -379,7 +514,7 @@
       topic_id: pack.topic.id,
       topic_label: state.pathTopic,
       assessment_mode: skip ? "baseline" : "diagnostic",
-      learner: { name: pack.learner.name, cohort: pack.learner.cohort, target_role: pack.learner.targetRole, level: state.pathLevel },
+      learner: { name: learnerName(), cohort: pack.learner.cohort, target_role: pack.learner.targetRole, level: state.pathLevel },
       available_time_minutes: state.timePlan,
       answers: skip ? [] : pack.diagnosticQuestions.map((question) => ({
         question_id: question.id,
@@ -574,7 +709,7 @@
 
   const confidenceLabel = (level) => level === "high" ? "Grounded · confidence cao" : level === "medium" ? "Cần kiểm tra thêm" : "Ngoài phạm vi nguồn";
 
-  const renderTutor = () => `${pageHeader("AI TUTOR · DOCUMENT GROUNDED", "Hỏi để hiểu, không hỏi để đoán", `Tutor dùng các chapter đã map trong ${escapeHtml(pack.topic.documentName)}. Khi không có căn cứ, hệ thống sẽ nói rõ và đề xuất thu hẹp câu hỏi.`, `<span class="grounded-badge">${icon("shield")} Source-grounded</span>`)}<div class="tutor-layout"><section class="tutor-chat panel-card"><div class="chat-header"><div><span class="panel-kicker">PATHWISE TUTOR</span><h2>Giải thích theo ngữ cảnh học của bạn</h2></div><button class="icon-button small" type="button" data-action="tutor-clear" aria-label="Xóa hội thoại" title="Xóa hội thoại">${icon("refresh")}</button></div><div class="chat-messages" aria-live="polite">${state.tutorMessages.map((message) => `<div class="chat-message ${message.role === "user" ? "is-user" : "is-assistant"}"><div class="message-avatar">${message.role === "user" ? "H" : icon("spark")}</div><div class="message-body"><span class="message-role">${message.role === "user" ? "Bạn" : "Pathwise tutor"}</span><p>${escapeHtml(message.text)}</p>${message.role === "assistant" ? `<div class="message-status"><span class="confidence-pill confidence-${message.confidence}">${confidenceLabel(message.confidence)}</span>${message.sources.length ? `<div class="source-row-inline">${sourceChips(message.sources)}</div>` : ""}</div>` : ""}</div></div>`).join("")}${state.tutorLoading ? `<div class="typing-indicator"><span></span><span></span><span></span><em>Đang đối chiếu PDF...</em></div>` : ""}</div><div class="quick-prompts"><span>Thử hỏi</span><button type="button" data-action="tutor-demo" data-prompt="Supervised và unsupervised learning khác nhau thế nào?">Learning types</button><button type="button" data-action="tutor-demo" data-prompt="Overfitting nên xử lý thế nào?">Overfitting</button><button type="button" data-action="tutor-demo" data-prompt="Accuracy có đủ để đánh giá classifier không?">Model evaluation</button></div><form class="chat-form" data-action="tutor-submit"><label class="sr-only" for="tutor-input">Câu hỏi cho AI tutor</label><input id="tutor-input" name="tutor" type="text" placeholder="Hỏi về regression, overfitting, classification..." autocomplete="off" /><button class="primary-button" type="submit" aria-label="Gửi câu hỏi">${icon("arrow")}</button></form><p class="chat-disclaimer">Agent có source ID · nếu API hết quota, hệ thống thử provider còn lại trước khi fallback.</p></section><aside class="tutor-aside"><div class="aside-card tutor-guardrail"><span class="aside-label">TUTOR GUARDRAIL</span><div class="guardrail-row"><span class="guardrail-check">${icon("check")}</span><span>Chỉ trích dẫn chapter có trong PDF</span></div><div class="guardrail-row"><span class="guardrail-check">${icon("check")}</span><span>Không bịa khi không tìm thấy căn cứ</span></div><div class="guardrail-row"><span class="guardrail-check">${icon("check")}</span><span>Cho biết confidence và đường chuyển tiếp</span></div></div><div class="aside-card source-reference"><span class="aside-label">PDF SOURCES</span>${pack.sources.map((source) => `<div class="reference-row"><strong>${source.id}</strong><span>${escapeHtml(source.label)}</span></div>`).join("")}</div></aside></div>`;
+  const renderTutor = () => `${pageHeader("AI TUTOR · DOCUMENT GROUNDED", "Hỏi để hiểu, không hỏi để đoán", `Tutor dùng các chapter đã map trong ${escapeHtml(pack.topic.documentName)}. Khi không có căn cứ, hệ thống sẽ nói rõ và đề xuất thu hẹp câu hỏi.`, `<span class="grounded-badge">${icon("shield")} Source-grounded</span>`)}<div class="tutor-layout"><section class="tutor-chat panel-card"><div class="chat-header"><div><span class="panel-kicker">PATHWISE TUTOR</span><h2>Giải thích theo ngữ cảnh học của bạn</h2></div><button class="icon-button small" type="button" data-action="tutor-clear" aria-label="Xóa hội thoại" title="Xóa hội thoại">${icon("refresh")}</button></div><div class="chat-messages" aria-live="polite">${state.tutorMessages.map((message) => `<div class="chat-message ${message.role === "user" ? "is-user" : "is-assistant"}"><div class="message-avatar">${message.role === "user" ? escapeHtml(userInitial()) : icon("spark")}</div><div class="message-body"><span class="message-role">${message.role === "user" ? "Bạn" : "Pathwise tutor"}</span><p>${escapeHtml(message.text)}</p>${message.role === "assistant" ? `<div class="message-status"><span class="confidence-pill confidence-${message.confidence}">${confidenceLabel(message.confidence)}</span>${message.sources.length ? `<div class="source-row-inline">${sourceChips(message.sources)}</div>` : ""}</div>` : ""}</div></div>`).join("")}${state.tutorLoading ? `<div class="typing-indicator"><span></span><span></span><span></span><em>Đang đối chiếu PDF...</em></div>` : ""}</div><div class="quick-prompts"><span>Thử hỏi</span><button type="button" data-action="tutor-demo" data-prompt="Supervised và unsupervised learning khác nhau thế nào?">Learning types</button><button type="button" data-action="tutor-demo" data-prompt="Overfitting nên xử lý thế nào?">Overfitting</button><button type="button" data-action="tutor-demo" data-prompt="Accuracy có đủ để đánh giá classifier không?">Model evaluation</button></div><form class="chat-form" data-action="tutor-submit"><label class="sr-only" for="tutor-input">Câu hỏi cho AI tutor</label><input id="tutor-input" name="tutor" type="text" placeholder="Hỏi về regression, overfitting, classification..." autocomplete="off" /><button class="primary-button" type="submit" aria-label="Gửi câu hỏi">${icon("arrow")}</button></form><p class="chat-disclaimer">Agent có source ID · nếu API hết quota, hệ thống thử provider còn lại trước khi fallback.</p></section><aside class="tutor-aside"><div class="aside-card tutor-guardrail"><span class="aside-label">TUTOR GUARDRAIL</span><div class="guardrail-row"><span class="guardrail-check">${icon("check")}</span><span>Chỉ trích dẫn chapter có trong PDF</span></div><div class="guardrail-row"><span class="guardrail-check">${icon("check")}</span><span>Không bịa khi không tìm thấy căn cứ</span></div><div class="guardrail-row"><span class="guardrail-check">${icon("check")}</span><span>Cho biết confidence và đường chuyển tiếp</span></div></div><div class="aside-card source-reference"><span class="aside-label">PDF SOURCES</span>${pack.sources.map((source) => `<div class="reference-row"><strong>${source.id}</strong><span>${escapeHtml(source.label)}</span></div>`).join("")}</div></aside></div>`;
 
   const renderLoading = () => state.diagnosticSkipped
     ? `${pageHeader("LEARNING PATH · BASELINE", "Đang dựng roadmap nền tảng", "Bạn đã chọn bắt đầu từ số 0 nên hệ thống bỏ qua diagnostic và sắp thứ tự theo prerequisite cùng thời gian bạn đã nhập.", "")}<div class="loading-state panel-card"><div class="loading-orbit">${icon("route")}</div><h2>Đang tạo roadmap từ mục tiêu...</h2><p>Chọn section nền tảng, chia thời lượng và chuẩn bị learning package đầu tiên.</p><div class="loading-lines"><i></i><i></i><i></i></div></div>`
@@ -584,6 +719,7 @@
     persistState();
     const view = ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
     viewContainer.innerHTML = view();
+    updateAccountUi();
     document.body.classList.toggle("is-onboarding", state.view === "setup");
     const topicSwitcher = document.querySelector(".topic-switcher");
     if (topicSwitcher) {
@@ -600,7 +736,7 @@
 
   const reset = () => {
     Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
-    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    try { localStorage.removeItem(stateStorageKey()); } catch {}
     window.history.replaceState(null, "", "#setup");
     render();
     showToast("Đã đặt lại toàn bộ phiên demo.");
@@ -690,6 +826,12 @@
   };
 
   document.addEventListener("click", (event) => {
+    const authAction = event.target.closest("[data-auth-action]");
+    if (authAction) {
+      if (authAction.dataset.authAction === "switch") showAuth(authMode === "login" ? "register" : "login");
+      return;
+    }
+    if (!currentUser) return;
     const nav = event.target.closest("[data-view]");
     if (nav) {
       if (!state.profileConfigured && nav.dataset.view !== "setup") {
@@ -718,9 +860,10 @@
       if (sidebarMedia.matches && document.querySelector(".sidebar").classList.contains("is-open")) document.querySelector(".sidebar-toggle").focus();
     }
     if (action === "close-sidebar") closeSidebar();
+    if (action === "logout") { logout(); return; }
     if (action === "topic-menu") { setView("setup"); closeSidebar(); }
     if (action === "notification") showToast("Bạn có thể chỉnh thời gian học trong learning roadmap.");
-    if (action === "profile") showToast("Hồ sơ học tập của Vũ Quốc Huy · K4 · 3B.");
+    if (action === "profile") showToast(`Hồ sơ học tập của ${learnerName()} · ${pack.learner.cohort} · Learner.`);
     if (action === "fill-topic") { state.pathTopic = target.dataset.topic; persistState(); render(); document.querySelector("#path-topic")?.focus(); }
     if (action === "select-path-level") { state.pathLevel = target.dataset.level; render(); }
     if (action === "save-time-plan") { const input = document.querySelector("#time-plan-input"); const minutes = input ? Number(input.value) : NaN; if (!isValidMinutes(minutes)) { showToast("Thời gian phải nằm trong khoảng 10–240 phút."); input?.focus(); return; } state.timePlan = minutes; state.pathMinutes = minutes; render(); showToast(`Đã cập nhật plan ${minutes} phút cho hôm nay.`); }
@@ -779,6 +922,7 @@
   });
 
   document.addEventListener("submit", (event) => {
+    if (event.target.matches("#auth-form")) { handleAuthSubmit(event); return; }
     if (event.target.matches("[data-action='tutor-submit']")) { event.preventDefault(); const input = event.target.querySelector("input"); sendTutor(input.value); }
   });
 
@@ -810,8 +954,7 @@
   });
 
   window.addEventListener("hashchange", () => { const view = window.location.hash.replace("#", ""); if (view) { state.view = view; render(); } });
-  restoreState();
-  render();
-  refreshEnvironmentStatus();
-  hydrateCloudState();
+  const existingUser = getSessionUser();
+  if (existingUser) showAppForUser(existingUser);
+  else showAuth("login");
 })();
