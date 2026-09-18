@@ -54,6 +54,7 @@
     masteryScore: null,
     masteryPassed: false,
     completedSections: {},
+    roadmapAnimation: null,
     remediationData: null,
     remediationText: "",
     remediationChecked: false,
@@ -195,6 +196,67 @@
     .replaceAll("'", "&#039;");
 
   const icon = (name) => icons[name] || icons.file;
+
+  const journeyStops = [
+    { x: 18, y: 100 },
+    { x: 77, y: 340 },
+    { x: 24, y: 590 },
+    { x: 76, y: 850 },
+    { x: 22, y: 1110 },
+    { x: 76, y: 1370 },
+    { x: 50, y: 1580 },
+  ];
+  const journeyMicroStops = [
+    [{ x: 30, y: 160 }, { x: 55, y: 220 }, { x: 74, y: 285 }],
+    [{ x: 66, y: 405 }, { x: 41, y: 470 }, { x: 25, y: 535 }],
+    [{ x: 35, y: 655 }, { x: 60, y: 720 }, { x: 75, y: 785 }],
+    [{ x: 66, y: 915 }, { x: 41, y: 980 }, { x: 23, y: 1045 }],
+    [{ x: 33, y: 1175 }, { x: 60, y: 1240 }, { x: 75, y: 1305 }],
+    [{ x: 70, y: 1425 }, { x: 60, y: 1485 }, { x: 51, y: 1535 }],
+  ];
+  const journeyRewards = [
+    { name: "La bàn khai phá", note: "Nhìn đúng bài toán trước khi chọn model" },
+    { name: "Bình dữ liệu", note: "Nhận diện tín hiệu và loại hình học" },
+    { name: "Tinh thể sai số", note: "Biến độ lệch thành hướng cải thiện" },
+    { name: "Khiên tổng quát", note: "Bảo vệ model khỏi overfitting" },
+    { name: "Radar đánh giá", note: "Nhìn rõ từng loại lỗi quan trọng" },
+    { name: "Tên lửa mô hình", note: "Sẵn sàng đưa lựa chọn vào thực tế" },
+  ];
+
+  const rewardArtwork = (index, unlocked = false) => {
+    const tone = unlocked ? "#4F46E5" : "#94A3B8";
+    const accent = unlocked ? "#F59E0B" : "#CBD5E1";
+    const mint = unlocked ? "#16A34A" : "#CBD5E1";
+    const drawings = [
+      `<circle cx="40" cy="40" r="23" fill="#fff" stroke="${tone}" stroke-width="4"/><path d="m34 46 5-14 7-5-5 14-7 5Z" fill="${accent}" stroke="${tone}" stroke-width="2"/><circle cx="40" cy="40" r="3" fill="${tone}"/>`,
+      `<path d="M29 18h22M34 18v14L23 54c-3 6 1 10 8 10h18c7 0 11-4 8-10L46 32V18" fill="#fff" stroke="${tone}" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 50c8-5 16 5 25 0l5 10H22l6-10Z" fill="${mint}" opacity=".9"/><circle cx="35" cy="45" r="3" fill="${accent}"/>`,
+      `<path d="m40 13 20 18-8 30H28l-8-30 20-18Z" fill="#fff" stroke="${tone}" stroke-width="4" stroke-linejoin="round"/><path d="m40 13 7 18-7 30-7-30 7-18ZM20 31h40" fill="${accent}" opacity=".72" stroke="${tone}" stroke-width="2" stroke-linejoin="round"/>`,
+      `<path d="m40 13 24 9v18c0 15-9 25-24 31-15-6-24-16-24-31V22l24-9Z" fill="#fff" stroke="${tone}" stroke-width="4" stroke-linejoin="round"/><path d="m28 40 8 8 17-18" fill="none" stroke="${mint}" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>`,
+      `<circle cx="40" cy="40" r="27" fill="#fff" stroke="${tone}" stroke-width="4"/><circle cx="40" cy="40" r="17" fill="none" stroke="${tone}" stroke-width="3" stroke-dasharray="5 5"/><path d="M40 40 58 26" stroke="${mint}" stroke-width="4" stroke-linecap="round"/><circle cx="40" cy="40" r="5" fill="${accent}"/>`,
+      `<path d="M44 13c13 5 20 17 20 31L48 60 30 42c1-14 6-24 14-29Z" fill="#fff" stroke="${tone}" stroke-width="4" stroke-linejoin="round"/><circle cx="47" cy="32" r="6" fill="${accent}" stroke="${tone}" stroke-width="3"/><path d="m31 43-11 4 9 9 2-13Zm16 17-4 11-9-9 13-2Z" fill="${mint}" stroke="${tone}" stroke-width="3" stroke-linejoin="round"/>`,
+    ];
+    return `<svg class="reward-art" width="80" height="80" viewBox="0 0 80 80" role="img" aria-label="${escapeHtml(journeyRewards[index].name)}"><circle cx="40" cy="40" r="38" fill="${unlocked ? "#EEF2FF" : "#F1F5F9"}"/>${drawings[index]}</svg>`;
+  };
+
+  const animeAvatar = () => `<svg width="74" height="106" viewBox="0 0 74 106" role="img" aria-label="Nhân vật đại diện của bạn">
+    <ellipse cx="37" cy="101" rx="25" ry="5" fill="rgba(49,46,129,.2)"/>
+    <path d="M24 67c-8 8-10 21-8 31h42c2-11-1-24-9-31H24Z" fill="#4F46E5" stroke="#312E81" stroke-width="2"/>
+    <path d="M29 76v22M45 76v22" stroke="#fff" stroke-width="7" stroke-linecap="round"/>
+    <path d="M22 96h13v6H20c-3 0-3-6 2-6Zm30 0H39v6h15c3 0 3-6-2-6Z" fill="#182236"/>
+    <path d="M20 69 9 84M52 69l12 14" stroke="#F4C7A8" stroke-width="7" stroke-linecap="round"/>
+    <path d="M31 57h12v14H31z" fill="#F4C7A8"/>
+    <circle cx="37" cy="38" r="25" fill="#F4C7A8" stroke="#312E81" stroke-width="2"/>
+    <path d="M14 39C12 17 24 6 41 8c16 2 22 15 18 32-5-7-11-12-18-17-5 8-14 13-27 16Z" fill="#25245B"/>
+    <path d="M18 31c2-17 15-25 28-21-13-1-19 6-22 16l-6 5Z" fill="#6563D9"/>
+    <path d="M27 42h6M43 42h6" stroke="#312E81" stroke-width="3" stroke-linecap="round"/>
+    <path d="M32 52c3 3 7 3 10 0" fill="none" stroke="#C45C6D" stroke-width="2" stroke-linecap="round"/>
+    <path d="M26 68h22l-4 13H30l-4-13Z" fill="#fff"/>
+    <path d="m37 70 4 5-4 5-4-5 4-5Z" fill="#F59E0B"/>
+  </svg>`;
+
+  const journeyFlag = () => `<svg width="22" height="26" viewBox="0 0 22 26" aria-hidden="true"><path d="M5 3v20" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/><path d="M6 4h12l-3 5 3 5H6V4Z" fill="currentColor"/></svg>`;
+
+  const trophyArtwork = (complete) => `<svg width="92" height="92" viewBox="0 0 92 92" role="img" aria-label="Cúp hoàn thành lộ trình"><circle cx="46" cy="46" r="44" fill="${complete ? "#FFF7D6" : "#F1F5F9"}"/><path d="M31 18h30v14c0 15-6 24-15 24s-15-9-15-24V18Z" fill="${complete ? "#FBBF24" : "#CBD5E1"}" stroke="${complete ? "#B45309" : "#94A3B8"}" stroke-width="3"/><path d="M31 24H20v7c0 9 6 15 15 15M61 24h11v7c0 9-6 15-15 15" fill="none" stroke="${complete ? "#B45309" : "#94A3B8"}" stroke-width="4" stroke-linejoin="round"/><path d="M46 56v12M33 76h26M38 68h16v8H38z" fill="none" stroke="${complete ? "#B45309" : "#94A3B8"}" stroke-width="4" stroke-linecap="round"/><path d="m46 25 3 6 7 1-5 5 1 7-6-3-6 3 1-7-5-5 7-1 3-6Z" fill="#fff"/></svg>`;
   const getSection = (id = state.selectedSectionId) => pack.sections.find((section) => section.id === id) || pack.sections[0];
   const getCompetency = (id) => pack.competencies.find((competency) => competency.id === id) || pack.competencies[0];
   const getSource = (id) => pack.sources.find((source) => source.id === id);
@@ -230,7 +292,7 @@
     const registerMode = authMode === "register";
     authContainer.innerHTML = `<div class="auth-heading"><h1>${registerMode ? "Tạo tài khoản Pathwise" : "Chào mừng trở lại"}</h1><p>${registerMode ? "Đăng ký để lưu riêng mục tiêu, tiến độ và lịch sử học của bạn." : "Đăng nhập để tiếp tục learning path của bạn."}</p></div><form id="auth-form" class="auth-form" novalidate>${registerMode ? `<div class="auth-field"><label for="auth-name">Tên hiển thị</label><input id="auth-name" name="name" type="text" autocomplete="name" placeholder="Ví dụ: Nguyễn Minh Anh" required /></div>` : ""}<div class="auth-field"><label for="auth-email">Email</label><input id="auth-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required /></div><div class="auth-field"><label for="auth-password">Mật khẩu</label><input id="auth-password" name="password" type="password" autocomplete="${registerMode ? "new-password" : "current-password"}" placeholder="Tối thiểu 6 ký tự" required /></div>${registerMode ? `<div class="auth-field"><label for="auth-confirm-password">Xác nhận mật khẩu</label><input id="auth-confirm-password" name="confirmPassword" type="password" autocomplete="new-password" placeholder="Nhập lại mật khẩu" required /></div>` : ""}<button class="primary-button auth-submit" type="submit">${registerMode ? "Đăng ký tài khoản" : "Đăng nhập"} ${icon("arrow")}</button></form>${authNotice ? `<p class="auth-message ${authNoticeIsError ? "is-error" : ""}" role="status">${escapeHtml(authNotice)}</p>` : ""}<p class="auth-switch">${registerMode ? "Đã có tài khoản?" : "Chưa có tài khoản?"} <button type="button" data-auth-action="switch">${registerMode ? "Đăng nhập" : "Đăng ký ngay"}</button></p><p class="auth-hint">${API_BASE ? "Tài khoản và tiến độ được lưu trên hệ thống." : "Dữ liệu learning path được lưu trên thiết bị này khi chạy local."}</p>`;
     const firstField = authContainer.querySelector("input");
-    window.setTimeout(() => firstField?.focus(), 0);
+    window.setTimeout(() => firstField?.focus({ preventScroll: true }), 0);
   };
 
   const showAuth = (mode = "login", notice = "", isError = false) => {
@@ -688,10 +750,35 @@
     const prioritySection = nextRecommendedSection();
     const gapCount = state.diagnosticSkipped ? 0 : (state.aiAnalysis?.competency_gaps?.length || 2);
     const planSource = state.diagnosticSkipped ? `Bạn bắt đầu từ số 0 nên roadmap đi theo prerequisite, không ép bạn làm diagnostic trước.` : state.diagnosticSubmitted ? `Kết quả diagnostic đã được dùng để ưu tiên ${escapeHtml(prioritySection.title)}.` : "Làm diagnostic để tạo lộ trình sát với kiến thức hiện tại.";
+    const completedCount = pack.sections.filter((section) => state.completedSections[section.id]).length;
+    const progress = Math.round((completedCount / pack.sections.length) * 100);
+    const avatarStop = journeyStops[Math.min(completedCount, journeyStops.length - 1)];
+    const allComplete = completedCount === pack.sections.length;
+    const microLabels = ["Nắm khái niệm", "Luyện tình huống", "Vượt mastery test"];
+    const roadmapPath = "M180 100 C180 220 770 220 770 340 S240 470 240 590 S760 720 760 850 S220 980 220 1110 S760 1240 760 1370 C760 1480 500 1480 500 1580";
     return `
-    ${pageHeader("LEARNING ROADMAP", "Lộ trình của bạn", "Thứ tự học được sắp theo gap hiện tại. Sau mỗi mastery test, Pathwise sẽ cập nhật section tiếp theo.", `<div class="time-plan-control"><label for="time-plan-input">Thời gian hôm nay</label><div class="time-plan-input"><input id="time-plan-input" type="number" min="10" max="240" step="1" inputmode="numeric" value="${escapeHtml(state.timePlan)}" aria-label="Số phút học hôm nay" /><span>phút</span><button type="button" data-action="save-time-plan">Lưu</button></div><small>10–240 phút</small></div>`)}
-    <div class="roadmap-summary"><div><span class="summary-label">PERSONALISED PLAN</span><h2>${state.diagnosticSkipped ? "Bắt đầu từ nền tảng" : "Ôn gap trước, học mới sau"}</h2><p>${planSource}</p></div><div class="summary-stats"><div><strong>${gapCount}</strong><span>${state.diagnosticSkipped ? "gap chưa đánh giá" : "gap ưu tiên"}</span></div><div><strong>${state.timePlan}</strong><span>phút dự kiến</span></div><div><strong>80%</strong><span>ngưỡng pass</span></div></div></div>
-    <div class="roadmap-layout"><section class="roadmap-timeline"><div class="timeline-header"><div><p class="section-eyebrow">YOUR SEQUENCE</p><h2>Thứ tự section</h2></div><span class="muted-label">Cập nhật sau mỗi test</span></div>${pack.sections.map((section, index) => { const status = sectionState(section, index); const comp = getCompetency(section.competencyId); const canOpen = status === "current" || status === "complete"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="roadmap-item ${status}"><div class="roadmap-rail"><span class="roadmap-node">${status === "complete" ? icon("check") : section.number}</span>${index < pack.sections.length - 1 ? "<i></i>" : ""}</div><div class="roadmap-content"><div class="roadmap-item-top"><div><span class="item-eyebrow">${escapeHtml(section.eyebrow)}</span><h3>${escapeHtml(section.title)} ${isRecommended ? statusBadge("AI ưu tiên", "warning") : ""}</h3></div>${statusBadge(status === "complete" ? "Đã pass" : status === "current" ? "Đang ưu tiên" : status === "next" ? "Tiếp theo" : "Đang khóa", status === "complete" ? "success" : status === "current" ? "warning" : status === "next" ? "info" : "locked")}</div><p>${escapeHtml(section.description)}</p><div class="roadmap-item-meta"><span>${icon("clock")} ${section.duration}</span><span>${icon("pulse")} ${comp.mastery}% mastery hiện tại</span><span>${icon("file")} ${section.sourceIds.length} sources</span></div>${canOpen ? `<button class="outline-button compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại section" : "Bắt đầu section"} ${icon("arrow")}</button>` : `<span class="locked-note">${icon("shield")} Pass section trước để mở</span>`}</div></article>`; }).join("")}</section><aside class="roadmap-aside"><div class="aside-card rationale-card"><span class="aside-label">WHY THIS ORDER?</span><h3>Hệ thống đang ưu tiên gì?</h3><div class="rationale-row"><span class="rationale-icon coral">${icon("pulse")}</span><span><strong>${escapeHtml(prioritySection.title)}</strong><small>Được chọn từ gap và prerequisite hiện tại.</small></span></div><div class="rationale-row"><span class="rationale-icon indigo">${icon("route")}</span><span><strong>Mastery gate</strong><small>Chỉ mở section tiếp theo khi đạt 80%.</small></span></div><div class="rationale-row"><span class="rationale-icon mint">${icon("clock")}</span><span><strong>Time-boxed session</strong><small>Plan hôm nay: ${state.timePlan} phút, có thể tạm dừng.</small></span></div></div><div class="aside-card evidence-card-small"><span class="aside-label">EVIDENCE BASIS</span><p>Điểm hổng được đối chiếu với chapter trong PDF đã nạp.</p><div class="source-row-inline">${sourceChips(pack.sources.slice(0, 3).map((source) => source.id))}</div><button class="link-button" type="button" data-view="tutor">Kiểm tra với tutor ${icon("arrow")}</button></div></aside></div>`;
+    ${pageHeader("LEARNING ROADMAP", "Hành trình AI Engineer của bạn", "Mỗi mastery test là một bước tiến thật. Hoàn thành ba điểm nhỏ để mở phần thưởng ở cột mốc tiếp theo.", `<div class="journey-header-actions"><button class="outline-button compact-button" type="button" data-action="preview-journey">${icon("route")} Xem chuyển động</button><div class="time-plan-control"><label for="time-plan-input">Thời gian hôm nay</label><div class="time-plan-input"><input id="time-plan-input" type="number" min="10" max="240" step="1" inputmode="numeric" value="${escapeHtml(state.timePlan)}" aria-label="Số phút học hôm nay" /><span>phút</span><button type="button" data-action="save-time-plan">Lưu</button></div><small>10–240 phút</small></div></div>`)}
+    <section class="journey-overview" aria-label="Tóm tắt tiến độ">
+      <div class="journey-overview-copy"><span class="summary-label">PERSONALISED QUEST</span><h2>${state.diagnosticSkipped ? "Khởi hành từ nền tảng" : "Đi theo đúng khoảng trống kiến thức"}</h2><p>${planSource}</p></div>
+      <div class="journey-progress" role="progressbar" aria-label="Tiến độ lộ trình" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><div class="journey-progress-ring" style="--journey-progress:${progress}"><strong>${progress}%</strong><span>hoàn thành</span></div></div>
+      <dl class="journey-facts"><div><dt>Đã pass</dt><dd>${completedCount}/${pack.sections.length}</dd></div><div><dt>Phiên hôm nay</dt><dd>${state.timePlan} phút</dd></div><div><dt>Mastery gate</dt><dd>80%</dd></div><div><dt>Gap ưu tiên</dt><dd>${gapCount}</dd></div></dl>
+    </section>
+    <div class="journey-legend" aria-label="Chú thích trạng thái"><span><i class="legend-swatch is-complete">${icon("check")}</i>Đã hoàn thành</span><span><i class="legend-swatch is-current"></i>Đang đứng</span><span><i class="legend-swatch"></i>Chưa đi qua</span></div>
+    <section class="journey-map" aria-label="Bản đồ lộ trình học tập" style="--journey-progress:${progress}">
+      <div class="journey-sky" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+      <svg class="journey-road" width="1000" height="1660" viewBox="0 0 1000 1660" preserveAspectRatio="none" aria-hidden="true">
+        <defs><linearGradient id="journey-road-gradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#7775EE"/><stop offset=".55" stop-color="#4F46E5"/><stop offset="1" stop-color="#312E81"/></linearGradient></defs>
+        <path class="road-shadow" d="${roadmapPath}"/>
+        <path class="road-base" d="${roadmapPath}"/>
+        <path class="road-center" d="${roadmapPath}"/>
+        <path class="road-progress" pathLength="100" d="${roadmapPath}" style="stroke-dasharray:${progress} 100"/>
+      </svg>
+      ${journeyMicroStops.map((group, segmentIndex) => group.map((point, pointIndex) => { const isDone = Boolean(state.completedSections[pack.sections[segmentIndex].id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
+      ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[index]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(journeyRewards[index].name)}</strong><small>${escapeHtml(journeyRewards[index].note)}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
+      <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${journeyStops[6].x}%;--point-y:${journeyStops[6].y}px;--mobile-y:1640px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp Machine Learning Foundations</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : "Hoàn thành đủ 6 cột mốc để chạm tới chiếc cúp cuối hành trình."}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
+      <div class="journey-avatar ${state.roadmapAnimation ? "is-advancing" : ""}" style="--point-x:${avatarStop.x}%;--point-y:${avatarStop.y}px;--mobile-y:${80 + completedCount * 260}px" data-stop="${completedCount}">${animeAvatar()}<span>Bạn đang ở đây</span></div>
+    </section>
+    <aside class="journey-note"><span class="rationale-icon indigo">${icon("route")}</span><div><strong>Vì sao đi theo thứ tự này?</strong><p>Prerequisite giữ cho mỗi bước vừa sức; mastery test xác nhận bạn thật sự có thể áp dụng trước khi avatar tiến lên. Trạng thái luôn có nhãn và biểu tượng, không chỉ dựa vào màu.</p></div><button class="link-button" type="button" data-view="tutor">Hỏi AI tutor ${icon("arrow")}</button></aside>`;
   };
 
   const renderLessonDepth = (section, studyPackage) => {
@@ -850,6 +937,41 @@
     return `${pageHeader(isMastery ? "SECTION MASTERY" : isFinal ? "TOPIC ASSESSMENT" : "DIAGNOSTIC", "Đang sinh bộ câu hỏi theo nội dung", "Hệ thống đang phân bổ câu hỏi theo số section, competency và learning cards thay vì dùng một số lượng cố định.", "")}<div class="loading-state panel-card"><div class="loading-orbit">${icon("spark")}</div><h2>Đang tạo bài test phù hợp...</h2><p>LLM chỉ được dùng nội dung đã map và source ID hợp lệ; nếu provider lỗi, hệ thống chuyển sang fallback theo nội dung.</p><div class="loading-lines"><i></i><i></i><i></i></div></div>`;
   };
 
+  const playRoadmapAnimation = () => {
+    const animation = state.roadmapAnimation;
+    const map = document.querySelector(".journey-map");
+    const avatar = document.querySelector(".journey-avatar");
+    if (!animation || !map || !avatar) return;
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      avatar.classList.remove("is-advancing");
+      state.roadmapAnimation = null;
+      liveRegion.textContent = "Tiến độ lộ trình đã được cập nhật.";
+      return;
+    }
+    const from = journeyStops[animation.from];
+    const to = journeyStops[animation.to];
+    const segment = journeyMicroStops[Math.min(animation.from, journeyMicroStops.length - 1)] || [];
+    const route = [from, ...segment, to];
+    const points = animation.preview ? [...route, ...route.slice(0, -1).reverse()] : route;
+    const finalPoint = animation.preview ? from : to;
+    const width = map.clientWidth;
+    const frames = points.map((point, index) => ({
+      transform: `translate(-50%, -91%) translate(${((point.x - finalPoint.x) / 100) * width}px, ${point.y - finalPoint.y}px)`,
+      offset: index / (points.length - 1),
+    }));
+    const motion = avatar.animate(frames, { duration: animation.preview ? 3000 : 2100, easing: "cubic-bezier(.2,.8,.2,1)", fill: "both" });
+    document.querySelectorAll(`.journey-micro-point[data-segment="${animation.from}"]`).forEach((point, index) => {
+      point.animate([{ transform: "translate(-50%, -50%) scale(.72)", opacity: .45 }, { transform: "translate(-50%, -50%) scale(1.22)", opacity: 1 }, { transform: "translate(-50%, -50%) scale(1)", opacity: 1 }], { duration: 520, delay: 420 + index * 360, easing: "cubic-bezier(.2,.8,.2,1)" });
+    });
+    motion.finished.then(() => {
+      avatar.classList.remove("is-advancing");
+      state.roadmapAnimation = null;
+      liveRegion.textContent = animation.preview ? "Đã phát thử chuyển động trên lộ trình." : "Avatar đã tới cột mốc mới. Ba cờ của chặng vừa qua đã hoàn thành.";
+      document.querySelector(`.journey-checkpoint:nth-of-type(${animation.to + 1}) .reward-art`)?.animate([{ transform: "scale(.75) rotate(-8deg)" }, { transform: "scale(1.12) rotate(4deg)" }, { transform: "scale(1) rotate(0)" }], { duration: 680, easing: "cubic-bezier(.2,.9,.2,1)" });
+    }).catch(() => {});
+  };
+
   const render = () => {
     persistState();
     const view = ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : ["assessment-loading", "mastery-loading"].includes(state.view) ? renderAssessmentLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
@@ -867,10 +989,15 @@
     document.querySelectorAll("[data-icon]").forEach((element) => { if (!element.innerHTML) element.innerHTML = icon(element.dataset.icon); });
     document.querySelectorAll(".nav-item").forEach((item) => item.classList.toggle("is-active", item.dataset.view === state.view || (state.view === "diagnostic-result" && item.dataset.view === "diagnostic")));
     if (state.sidebarOpen) document.querySelector(".sidebar")?.classList.add("is-open");
+    if (state.view === "mastery" && state.masterySubmitted && state.masteryPassed) {
+      const nextButton = document.querySelector('[data-action="next-section"]');
+      if (nextButton) nextButton.innerHTML = `Xem hành trình mới ${icon("arrow")}`;
+    }
+    if (state.view === "roadmap" && state.roadmapAnimation) window.requestAnimationFrame(playRoadmapAnimation);
   };
 
   const reset = () => {
-    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
+    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
     try { localStorage.removeItem(stateStorageKey()); } catch {}
     window.history.replaceState(null, "", "#setup");
     render();
@@ -1002,6 +1129,12 @@
     if (action === "fill-topic") { state.pathTopic = target.dataset.topic; persistState(); render(); document.querySelector("#path-topic")?.focus(); }
     if (action === "select-path-level") { state.pathLevel = target.dataset.level; render(); }
     if (action === "save-time-plan") { const input = document.querySelector("#time-plan-input"); const minutes = input ? Number(input.value) : NaN; if (!isValidMinutes(minutes)) { showToast("Thời gian phải nằm trong khoảng 10–240 phút."); input?.focus(); return; } state.timePlan = minutes; state.pathMinutes = minutes; render(); showToast(`Đã cập nhật plan ${minutes} phút cho hôm nay.`); }
+    if (action === "preview-journey") {
+      const completedCount = pack.sections.filter((section) => state.completedSections[section.id]).length;
+      state.roadmapAnimation = completedCount > 0 ? { from: completedCount - 1, to: completedCount, preview: true } : { from: 0, to: 1, preview: true };
+      render();
+      showToast("Đang phát thử chuyển động của avatar trên lộ trình.");
+    }
     if (action === "create-path") {
       if (!isValidTopic(state.pathTopic)) { showToast("Hãy nhập chủ đề bạn muốn học."); document.querySelector("#path-topic")?.focus(); return; }
       if (!isValidMinutes(state.pathMinutes)) { showToast("Hãy nhập thời gian học từ 10 đến 240 phút."); document.querySelector("#path-minutes")?.focus(); return; }
@@ -1052,7 +1185,17 @@
     if (action === "start-remediation") loadRemediation();
     if (action === "check-remediation") { const input = document.querySelector("#remediation-input"); state.remediationText = input ? input.value : ""; state.remediationChecked = state.remediationText.trim().length > 10; render(); showToast(state.remediationChecked ? "Đã ghi nhận explain-back." : "Hãy viết ít nhất một câu giải thích."); }
     if (action === "retry-mastery") { state.masteryIndex = 0; state.masteryAnswers = {}; state.masterySubmitted = false; state.studyCompleted = true; state.remediationChecked = false; state.remediationText = ""; loadAssessment("mastery", state.selectedSectionId); }
-    if (action === "next-section") { const currentIndex = pack.sections.findIndex((section) => section.id === state.selectedSectionId); const nextSection = pack.sections[currentIndex + 1]; if (nextSection) { state.selectedSectionId = nextSection.id; state.studyChecks = []; state.studyCompleted = false; state.focusStarted = false; setView("study"); showToast(`Section ${nextSection.title} đã được mở.`); } else { setView("assessment"); } }
+    if (action === "next-section") {
+      const completedCount = pack.sections.filter((section) => state.completedSections[section.id]).length;
+      state.roadmapAnimation = { from: Math.max(0, completedCount - 1), to: completedCount, preview: false };
+      const nextSection = pack.sections[completedCount];
+      if (nextSection) state.selectedSectionId = nextSection.id;
+      state.studyChecks = [];
+      state.studyCompleted = false;
+      state.focusStarted = false;
+      setView("roadmap");
+      showToast(nextSection ? `Đã mở cột mốc ${nextSection.title}.` : "Bạn đã tới chiếc cúp cuối lộ trình.");
+    }
     if (action === "start-final") { const allSectionsDone = pack.sections.every((section) => state.completedSections[section.id]); if (!allSectionsDone) { showToast("Hãy pass tất cả section trước khi mở final assessment."); return; } state.finalStarted = true; state.finalSubmitted = false; state.finalAnswers = {}; state.finalIndex = 0; loadAssessment("final"); }
     if (action === "answer-final") chooseFinalAnswer(Number(target.dataset.index));
     if (action === "final-next") { const questions = activeFinalQuestions(); const question = questions[state.finalIndex]; if (state.finalAnswers[question.id] === undefined) { showToast("Hãy chọn một phương án trước."); return; } if (state.finalIndex < questions.length - 1) { state.finalIndex += 1; render(); } else { state.finalSubmitted = true; state.finalScore = finalScore().percent; render(); } }
