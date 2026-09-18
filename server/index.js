@@ -20,6 +20,7 @@ const {
   roadmapReference,
 } = require("./topic-context");
 const { discoverCatalogSources, sanitizeSources } = require("./source-catalog");
+const { clamp, assessmentCountForSections, validateAssessmentQuestion } = require("./learning-contracts");
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
@@ -415,7 +416,9 @@ const fallbackAssessment = (input) => {
   const questions = [];
   const addQuestion = (question, section, index) => {
     if (!section || questions.length >= desired) return;
-    const sourceIds = validSources(question.source_ids || question.sourceIds || section.source_ids || section.sourceIds, input);
+    const sectionSourceIds = validSources(section.source_ids || section.sourceIds, input);
+    const candidateSourceIds = validSources(question.source_ids || question.sourceIds, input);
+    const sourceIds = sectionSourceIds.length ? sectionSourceIds : candidateSourceIds;
     if (!sourceIds.length) return;
     const concepts = Array.isArray(section.concepts) ? section.concepts : [];
     const concept = concepts[index % Math.max(1, concepts.length)] || { title: "mục tiêu section", body: section.objective || section.title };
@@ -428,15 +431,21 @@ const fallbackAssessment = (input) => {
     const options = Array.isArray(question.options) && question.options.length >= 4
       ? question.options.slice(0, 4).map((option) => String(option))
       : [generatedCorrect, "Không cần xác định mục tiêu của section.", "Chỉ cần chọn model theo tên.", "Không cần dữ liệu để kiểm tra kết quả."];
+    const sourcePrompt = String(question.prompt || "").trim();
+    const prompt = sourcePrompt
+      ? `${sourcePrompt} — tập trung vào ${concept.title} của section ${section.title} (góc kiểm tra ${index + 1}).`
+      : `${generatedPrompt} (góc kiểm tra ${index + 1})`;
+    const candidateCorrectIndex = Number.isInteger(question.correct_index) ? question.correct_index : Number.isInteger(question.correctIndex) ? question.correctIndex : 0;
+    const correctIndex = candidateCorrectIndex >= 0 && candidateCorrectIndex < 4 ? candidateCorrectIndex : 0;
     questions.push({
       id: `${mode}-fallback-${index + 1}`,
       section_id: section.id,
       competency_id: section.competency_id || section.competencyId || "ml-foundations",
       label: question.label || assessmentLabel(mode),
-      prompt: question.prompt || `${generatedPrompt} (góc kiểm tra ${index + 1})`,
+      prompt,
       options,
-      correct_index: Number.isInteger(question.correct_index) ? question.correct_index : Number.isInteger(question.correctIndex) ? question.correctIndex : 0,
-      explanation: question.explanation || `Câu hỏi được tạo từ mục tiêu và nội dung của section ${section.title}.`,
+      correct_index: correctIndex,
+      explanation: question.explanation || `Câu hỏi được tạo từ mục tiêu ${concept.title} và nội dung của section ${section.title}.`,
       source_ids: sourceIds,
     });
   };
@@ -523,20 +532,26 @@ const safeAssessment = (data, input) => {
     const prompt = String(question.prompt || "").trim();
     const sourceIds = validSources(question.source_ids, input).filter((id) => !(section.source_ids || section.sourceIds) || (section.source_ids || section.sourceIds).includes(id));
     const correctIndex = Number(question.correct_index);
-    const promptKey = normalise(prompt);
-    if (!prompt || options.length !== 4 || !Number.isInteger(correctIndex) || correctIndex < 0 || correctIndex > 3 || !sourceIds.length || seen.has(promptKey)) return null;
-    seen.add(promptKey);
+    const contract = validateAssessmentQuestion({ ...question, prompt, options, correct_index: correctIndex }, {
+      mode: input.mode || "diagnostic",
+      index,
+      section,
+      sourceIds,
+      seenPrompts: seen,
+    });
+    if (!contract) return null;
+    seen.add(contract.promptKey);
     const competencyId = section.competency_id || section.competencyId || question.competency_id;
     return {
-      id: String(question.id || `${input.mode || "assessment"}-${index + 1}`),
+      id: contract.id,
       section_id: section.id,
       competency_id: runtimeCompetencyIds(input).has(competencyId) ? competencyId : input.competencies?.[0]?.id || "ml-foundations",
       label: String(question.label || assessmentLabel(input.mode)).slice(0, 80),
-      prompt: prompt.slice(0, 500),
-      options,
-      correct_index: correctIndex,
-      explanation: String(question.explanation || "").trim().slice(0, 600),
-      source_ids: sourceIds,
+      prompt: contract.prompt.slice(0, 500),
+      options: contract.options,
+      correct_index: contract.correctIndex,
+      explanation: contract.explanation.slice(0, 600),
+      source_ids: contract.sourceIds,
     };
   }).filter(Boolean).slice(0, assessmentCount(input));
   return { status: data.status || "ok", mode: input.mode || "diagnostic", question_count: questions.length, questions };
@@ -710,18 +725,6 @@ const callBlueprintProvider = async (name, input) => {
   }, Number(process.env.BLUEPRINT_TIMEOUT_MS || 15000));
   const content = response.choices?.[0]?.message?.content;
   return { data: parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content), prompt };
-};
-
-const clamp = (value, min, max) => Math.max(min, Math.min(max, Number(value) || min));
-const sectionQuestionCount = (section) => clamp(Math.ceil(((section?.concepts?.length || 0) + (section?.checklist?.length || 0)) / 3), 1, 3);
-const assessmentCountForSections = (mode, inputSections = [], sectionId = "") => {
-  if (mode === "mastery") {
-    const section = inputSections.find((item) => item.id === sectionId) || inputSections[0];
-    return clamp(Math.max(3, (section?.concepts?.length || section?.checklist?.length || 2) * 2), 3, 8);
-  }
-  const diagnostic = inputSections.reduce((total, section) => total + sectionQuestionCount(section), 0);
-  const minimum = Math.max(4, inputSections.length || 1);
-  return mode === "final" ? clamp(Math.ceil(diagnostic / 2), Math.min(minimum, diagnostic || minimum), 24) : clamp(diagnostic, minimum, 24);
 };
 
 const normalizeBlueprint = (data, input) => {

@@ -61,6 +61,11 @@
     masteryScore: null,
     masteryPassed: false,
     completedSections: {},
+    completedMicroLessons: {},
+    studyTimeByDay: {},
+    studyTimerStartedAt: null,
+    celebration: null,
+    celebratedSections: {},
     roadmapAnimation: null,
     remediationData: null,
     remediationText: "",
@@ -95,7 +100,7 @@
   const cloneData = (value) => JSON.parse(JSON.stringify(value));
   const defaultState = cloneData(state);
   defaultState.view = "setup";
-  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "newPathDraft", "topicBlueprint", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
+  const persistableState = ["view", "profileConfigured", "pathTopic", "pathLevel", "pathMinutes", "newPathDraft", "topicBlueprint", "diagnosticIndex", "diagnosticAnswers", "diagnosticConfidence", "diagnosticSubmitted", "diagnosticSkipped", "assessmentVersion", "assessmentQuestions", "assessmentMeta", "aiAnalysis", "agentMeta", "recommendedPath", "selectedSectionId", "timePlan", "focusStarted", "studyCompleted", "studyChecks", "masteryIndex", "masteryAnswers", "masterySubmitted", "masteryScore", "masteryPassed", "completedSections", "completedMicroLessons", "studyTimeByDay", "celebration", "celebratedSections", "remediationData", "remediationText", "remediationChecked", "discoveredSources", "generatedPackages", "studySlideIndices", "finalStarted", "finalIndex", "finalAnswers", "finalSubmitted", "finalScore", "tutorMessages"];
   const stateStorageKey = () => currentUser ? `${USER_STORAGE_PREFIX}${currentUser.id}` : LEGACY_STORAGE_KEY;
   const userInitial = () => String(currentUser?.name || "H").trim().charAt(0).toUpperCase() || "H";
   const learnerName = () => currentUser?.name || pack.learner.name;
@@ -204,6 +209,10 @@
       if (!state.assessmentMeta || typeof state.assessmentMeta !== "object") state.assessmentMeta = { mastery: {} };
       if (!state.assessmentMeta.mastery || typeof state.assessmentMeta.mastery !== "object") state.assessmentMeta.mastery = {};
       if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
+      if (!state.completedMicroLessons || typeof state.completedMicroLessons !== "object") state.completedMicroLessons = {};
+      if (!state.studyTimeByDay || typeof state.studyTimeByDay !== "object") state.studyTimeByDay = {};
+      if (!state.celebratedSections || typeof state.celebratedSections !== "object") state.celebratedSections = {};
+      state.studyTimerStartedAt = null;
       state.studyContentLoading = "";
       if (!pack.sections.some((section) => section.id === state.selectedSectionId)) state.selectedSectionId = pack.sections[0].id;
       // Migrate sessions that used the removed option to the diagnostic flow.
@@ -315,6 +324,49 @@
   const getSection = (id = state.selectedSectionId) => pack.sections.find((section) => section.id === id) || pack.sections[0];
   const getCompetency = (id) => pack.competencies.find((competency) => competency.id === id) || pack.competencies[0];
   const getSource = (id) => pack.sources.find((source) => source.id === id);
+  const microLessons = (section) => {
+    const concepts = Array.isArray(section?.concepts) && section.concepts.length
+      ? section.concepts
+      : (section?.checklist || []).map((body, index) => ({ title: `Mục tiêu ${index + 1}`, body }));
+    return concepts.slice(0, 4).map((concept, index) => ({
+      id: `${section.id}-micro-${index + 1}`,
+      number: `${section.number || String(pack.sections.indexOf(section) + 1).padStart(2, "0")}.${index + 1}`,
+      title: concept.title || `Phần ${index + 1}`,
+      summary: concept.body || section.objective || section.title,
+      slideIndex: index + 1,
+    }));
+  };
+  const completedMicroCount = (section) => new Set(Array.isArray(state.completedMicroLessons[section.id]) ? state.completedMicroLessons[section.id] : []).size;
+  const microIsComplete = (section, index) => Boolean(state.completedSections[section.id]) || (state.completedMicroLessons[section.id] || []).includes(index);
+  const markMicroLessonComplete = (section, index) => {
+    if (!section || index < 0 || index >= microLessons(section).length || microIsComplete(section, index)) return;
+    const completed = new Set(Array.isArray(state.completedMicroLessons[section.id]) ? state.completedMicroLessons[section.id] : []);
+    completed.add(index);
+    state.completedMicroLessons[section.id] = [...completed].sort((a, b) => a - b);
+    persistState();
+  };
+  const completeAllMicroLessons = (section) => {
+    if (!section) return;
+    state.completedMicroLessons[section.id] = microLessons(section).map((_, index) => index);
+    persistState();
+  };
+  const dateKey = (date = new Date()) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const todayStudySeconds = () => Math.round(Number(state.studyTimeByDay[dateKey()] || 0));
+  const formatStudyDuration = (seconds) => seconds >= 3600
+    ? `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+    : `${Math.floor(seconds / 60)}m`;
+  const startStudyClock = () => {
+    if (state.view === "study" && !state.studyTimerStartedAt) state.studyTimerStartedAt = Date.now();
+  };
+  const flushStudyTime = (force = false) => {
+    if (!state.studyTimerStartedAt || (!force && state.view !== "study")) return;
+    const elapsed = Math.max(0, Math.floor((Date.now() - state.studyTimerStartedAt) / 1000));
+    if (!elapsed) return;
+    const key = dateKey();
+    state.studyTimeByDay[key] = Number(state.studyTimeByDay[key] || 0) + elapsed;
+    state.studyTimerStartedAt = state.view === "study" && !force ? Date.now() : null;
+    persistState();
+  };
   const activeTopicTitle = () => state.pathTopic || pack.topic.title;
   const activeTopicModule = () => {
     const module = pack.topic.module;
@@ -429,6 +481,7 @@
   };
 
   const logout = () => {
+    flushStudyTime(true);
     persistState();
     window.clearTimeout(cloudSaveTimer);
     if (API_BASE && authToken) fetch(`${API_BASE}/api/auth/logout`, { method: "POST", headers: authHeaders({ "Content-Type": "application/json" }), body: "{}" }).catch(() => {});
@@ -804,12 +857,13 @@
 
   const prefersReducedMotion = () => Boolean(window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches);
   const setView = (view, options = {}) => {
+    if (state.view === "study" && view !== "study") flushStudyTime(true);
     state.view = view;
     if (options.hash !== false && window.location.hash !== `#${view}`) {
       const updateHistory = window.history.pushState || window.history.replaceState;
       updateHistory.call(window.history, null, "", `#${view}`);
     }
-    if (view === "study") ensureFocusTimerRunning(); else stopFocusTimer();
+    if (view === "study") { startStudyClock(); ensureFocusTimerRunning(); } else stopFocusTimer();
     render();
     document.querySelector("#view-heading")?.focus({ preventScroll: true });
     if (options.scroll !== false) document.querySelector("#main-content")?.scrollTo({ top: 0, behavior: prefersReducedMotion() ? "auto" : "smooth" });
@@ -840,7 +894,7 @@
     return `
     <section class="metric-grid" aria-label="Chỉ số học tập">
       <article class="metric-card"><div class="metric-icon metric-icon-indigo">${icon("pulse")}</div><div><span>Topic mastery</span><strong>${topicProgress()}<span class="metric-unit">%</span></strong><small>${masteryCaption}</small></div></article>
-      <article class="metric-card"><div class="metric-icon metric-icon-mint">${icon("clock")}</div><div><span>Thời gian tuần này</span><strong>0<span class="metric-unit">m</span></strong><small>Chưa có phiên học trong path này</small></div></article>
+      <article class="metric-card"><div class="metric-icon metric-icon-mint">${icon("clock")}</div><div><span>Học hôm nay</span><strong>${formatStudyDuration(todayStudySeconds())}</strong><small>${todayStudySeconds() ? "Thời gian được ghi nhận trong study session" : "Bắt đầu một study session để ghi nhận"}</small></div></article>
       <article class="metric-card"><div class="metric-icon metric-icon-coral">${icon("flame")}</div><div><span>Learning streak</span><strong>0<span class="metric-unit"> ngày</span></strong><small>Bắt đầu sau phiên học đầu tiên</small></div></article>
       <article class="metric-card"><div class="metric-icon metric-icon-slate">${icon("check")}</div><div><span>Điểm cần pass</span><strong>80<span class="metric-unit">%</span></strong><small>áp dụng cho mỗi section</small></div></article>
     </section>`;
@@ -971,6 +1025,16 @@
       state.agentMeta = { live: false, provider: "local-fallback", fallback_reason: "backend_unavailable" };
       state.recommendedPath = state.aiAnalysis.recommended_path || [];
     }
+    if (!skip) {
+      const firstGapQuestion = questions.find((question) => state.diagnosticAnswers[question.id] !== question.correctIndex);
+      const firstGapSectionIndex = firstGapQuestion ? pack.sections.findIndex((section) => section.id === firstGapQuestion.sectionId) : -1;
+      const creditedSections = firstGapQuestion ? Math.max(0, firstGapSectionIndex) : Math.max(0, pack.sections.length - 1);
+      for (let index = 0; index < creditedSections; index += 1) {
+        const section = pack.sections[index];
+        state.completedSections[section.id] = true;
+        completeAllMicroLessons(section);
+      }
+    }
     state.selectedSectionId = nextRecommendedSection().id;
     state.diagnosticSubmitted = !skip;
     state.diagnosticSkipped = skip;
@@ -1011,7 +1075,7 @@
     <section class="journey-overview" aria-label="Tóm tắt tiến độ">
       <div class="journey-overview-copy"><span class="summary-label">PERSONALISED QUEST</span><h2>${state.diagnosticSkipped ? "Khởi hành từ nền tảng" : "Đi theo đúng khoảng trống kiến thức"}</h2><p>${planSource}</p></div>
       <div class="journey-progress" role="progressbar" aria-label="Tiến độ lộ trình" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress}"><div class="journey-progress-ring" style="--journey-progress:${progress}"><strong>${progress}%</strong><span>hoàn thành</span></div></div>
-      <dl class="journey-facts"><div><dt>Đã pass</dt><dd>${completedCount}/${pack.sections.length}</dd></div><div><dt>Phiên hôm nay</dt><dd>${state.timePlan} phút</dd></div><div><dt>Mastery gate</dt><dd>80%</dd></div><div><dt>Gap ưu tiên</dt><dd>${gapCount}</dd></div></dl>
+      <dl class="journey-facts"><div><dt>Đã pass</dt><dd>${completedCount}/${pack.sections.length}</dd></div><div><dt>Học hôm nay</dt><dd>${formatStudyDuration(todayStudySeconds())}</dd></div><div><dt>Mastery gate</dt><dd>80%</dd></div><div><dt>Gap ưu tiên</dt><dd>${gapCount}</dd></div></dl>
     </section>
     <div class="journey-legend" aria-label="Chú thích trạng thái"><span><i class="legend-swatch is-complete">${icon("check")}</i>Đã hoàn thành</span><span><i class="legend-swatch is-current"></i>Đang đứng</span><span><i class="legend-swatch"></i>Chưa đi qua</span></div>
     <section class="journey-map" aria-label="Bản đồ lộ trình học tập" style="--journey-progress:${progress}">
@@ -1023,7 +1087,7 @@
         <path class="road-center" d="${roadmapPath}"/>
         <path class="road-progress" pathLength="100" d="${roadmapPath}" style="stroke-dasharray:${progress} 100"/>
       </svg>
-      ${journeyMicroStops.slice(0, pack.sections.length).map((group, segmentIndex) => group.map((point, pointIndex) => { const isDone = Boolean(state.completedSections[pack.sections[segmentIndex].id]); return `<span class="journey-micro-point ${isDone ? "is-complete" : ""}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" role="listitem" aria-label="${microLabels[pointIndex]}: ${isDone ? "đã hoàn thành" : "chưa hoàn thành"}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(microLabels[pointIndex])}</b></span>`; }).join("")).join("")}
+      ${journeyMicroStops.slice(0, pack.sections.length).map((group, segmentIndex) => group.map((point, pointIndex) => { const section = pack.sections[segmentIndex]; const lesson = microLessons(section)[pointIndex] || { title: microLabels[pointIndex] }; const status = sectionState(section, segmentIndex); const isDone = microIsComplete(section, pointIndex); const canOpen = status === "current" || status === "complete"; if (!canOpen) return `<span class="journey-micro-point is-concealed" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" aria-hidden="true"></span>`; return `<button class="journey-micro-point ${isDone ? "is-complete" : ""}" type="button" data-action="open-roadmap-micro" data-section-id="${section.id}" data-micro-index="${pointIndex}" data-segment="${segmentIndex}" style="--point-x:${point.x}%;--point-y:${point.y}px" aria-label="${escapeHtml(lesson.title)}: ${isDone ? "đã hoàn thành" : "có thể học"}" title="${escapeHtml(lesson.summary || lesson.title)}">${isDone ? journeyFlag() : `<i>${pointIndex + 1}</i>`}<b>${escapeHtml(lesson.title)}</b></button>`; }).join("")).join("")}
       ${pack.sections.map((section, index) => { const status = sectionState(section, index); const point = journeyStops[Math.min(index, journeyStops.length - 2)]; const reward = journeyRewards[index % journeyRewards.length]; const canOpen = status === "current" || status === "complete"; const unlocked = status !== "locked" && status !== "next"; const isRecommended = section.id === prioritySection.id && status === "current"; return `<article class="journey-checkpoint ${point.x < 50 ? "is-left" : "is-right"} ${status}" style="--point-x:${point.x}%;--point-y:${point.y}px;--mobile-y:${80 + index * 260}px" aria-labelledby="journey-title-${index}"><span class="checkpoint-pin"><span>${status === "complete" ? icon("check") : section.number}</span></span><div class="checkpoint-card"><div class="checkpoint-card-top">${rewardArtwork(index % journeyRewards.length, unlocked || status === "complete")}<div><span class="item-eyebrow">CỘT MỐC ${section.number} · ${escapeHtml(section.eyebrow)}</span><h2 id="journey-title-${index}">${escapeHtml(section.title)}</h2></div></div><p>${escapeHtml(section.description)}</p><div class="checkpoint-reward"><span>PHẦN THƯỞNG</span><strong>${escapeHtml(reward.name)}</strong><small>${escapeHtml(reward.note)}</small></div><div class="checkpoint-meta"><span>${icon("clock")} ${section.duration}</span><span>${status === "complete" ? icon("check") + " Đã pass" : status === "current" ? icon("route") + " Đang chờ bạn" : icon("shield") + " Chưa mở"}</span></div>${canOpen ? `<button class="${status === "current" ? "primary-button" : "outline-button"} compact-button" type="button" data-action="go-section" data-section-id="${section.id}">${status === "complete" ? "Xem lại chặng" : "Bắt đầu chặng này"} ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} Pass cột mốc trước để mở</span>`}${isRecommended ? `<span class="recommended-ribbon">AI ƯU TIÊN</span>` : ""}</div></article>`; }).join("")}
       <article class="journey-checkpoint is-finish ${allComplete ? "complete" : "locked"}" style="--point-x:${journeyStops[6].x}%;--point-y:${journeyStops[6].y}px;--mobile-y:1640px" aria-labelledby="journey-finish-title"><span class="checkpoint-pin finish-pin">${icon(allComplete ? "check" : "shield")}</span><div class="checkpoint-card finish-card">${trophyArtwork(allComplete)}<div><span class="item-eyebrow">FINAL TOPIC GATE</span><h2 id="journey-finish-title">Cúp ${escapeHtml(activeTopicTitle())}</h2><p>${allComplete ? "Bạn đã đi qua toàn bộ các cột mốc. Final assessment đang chờ để xác nhận chiến thắng." : `Hoàn thành đủ ${pack.sections.length} cột mốc để chạm tới chiếc cúp cuối hành trình.`}</p>${allComplete ? `<button class="primary-button compact-button" type="button" data-action="start-final">Chinh phục bài cuối ${icon("arrow")}</button>` : `<span class="checkpoint-locked">${icon("shield")} ${pack.sections.length - completedCount} cột mốc còn lại</span>`}</div></div></article>
       <div class="journey-avatar ${state.roadmapAnimation ? "is-advancing" : ""}" style="--point-x:${avatarStop.x}%;--point-y:${avatarStop.y}px;--mobile-y:${80 + completedCount * 260}px" data-stop="${completedCount}">${animeAvatar()}<span>Bạn đang ở đây</span></div>
@@ -1084,7 +1148,9 @@
     const slides = Array.isArray(studyPackage.slides) && studyPackage.slides.length >= 6 ? studyPackage.slides : legacySlideDeck(section, studyPackage);
     if (!state.studySlideIndices || typeof state.studySlideIndices !== "object") state.studySlideIndices = {};
     const current = Number(state.studySlideIndices[section.id] || 0);
-    state.studySlideIndices[section.id] = Math.max(0, Math.min(slides.length - 1, current + delta));
+    const nextIndex = Math.max(0, Math.min(slides.length - 1, current + delta));
+    state.studySlideIndices[section.id] = nextIndex;
+    if (nextIndex > 0) markMicroLessonComplete(section, Math.min(microLessons(section).length - 1, nextIndex - 1));
     persistState();
     render();
   };
@@ -1095,6 +1161,13 @@
     const decisionCase = studyPackage.decisionCase || section.decisionCase;
     if (!lessonSections.length && !commonMistakes.length && !decisionCase) return "";
     return `<section class="lesson-deep-dive"><div class="lesson-deep-dive-header"><div><span class="content-label">HỌC KỸ HƠN</span><h2>Từ khái niệm đến quyết định</h2><p>Đọc theo ba lớp: hiểu khái niệm, nhận diện lỗi thường gặp và thử áp dụng vào một tình huống gần với công việc AI Engineer.</p></div><span class="depth-badge">${lessonSections.length + commonMistakes.length + (decisionCase ? 1 : 0)} điểm nội dung</span></div><div class="lesson-detail-grid">${lessonSections.map((item, index) => `<article class="lesson-detail-card"><span class="lesson-detail-number">${String(index + 1).padStart(2, "0")}</span><div><h3>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.body)}</p>${item.checkpoint ? `<div class="detail-checkpoint"><strong>Tự kiểm:</strong> ${escapeHtml(item.checkpoint)}</div>` : ""}</div></article>`).join("")}</div>${decisionCase ? `<article class="decision-case"><div class="application-heading"><span class="application-icon">${icon("route")}</span><div><span class="content-label">CASE STUDY</span><h3>${escapeHtml(decisionCase.title)}</h3></div></div><p><strong>Bối cảnh:</strong> ${escapeHtml(decisionCase.context)}</p><p><strong>Quyết định cần đưa ra:</strong> ${escapeHtml(decisionCase.decision)}</p><div class="decision-case-answer"><strong>Cách suy nghĩ:</strong> ${escapeHtml(decisionCase.answer)}</div></article>` : ""}${commonMistakes.length ? `<div class="common-mistakes"><span class="content-label">DỄ NHẦM Ở ĐÂY</span>${commonMistakes.map((mistake) => `<div class="mistake-row"><span>${icon("close")}</span><p>${escapeHtml(mistake)}</p></div>`).join("")}</div>` : ""}</section>`;
+  };
+
+  const renderMicroLessonRail = (section) => {
+    const lessons = microLessons(section);
+    if (!lessons.length) return "";
+    const completed = completedMicroCount(section);
+    return `<section class="micro-lesson-rail panel-card" aria-label="Các phần nhỏ của section"><div class="micro-lesson-rail-heading"><div><span class="content-label">MICRO-LESSON PATH</span><h2>Đi qua từng mục tiêu nhỏ</h2><p>${completed}/${lessons.length} phần đã xem. Mỗi phần bám vào một concept do blueprint của topic tạo ra.</p></div><span class="micro-lesson-count">${completed}/${lessons.length}</span></div><div class="micro-lesson-list">${lessons.map((lesson, index) => { const done = microIsComplete(section, index); return `<button class="micro-lesson-button ${done ? "is-done" : ""}" type="button" data-action="open-micro-lesson" data-index="${index}" aria-pressed="${done}"><span>${done ? icon("check") : lesson.number}</span><strong>${escapeHtml(lesson.title)}</strong><small>${done ? "Đã xem · có thể mở lại" : "Mở phần này"}</small><em>${escapeHtml(lesson.summary)}</em></button>`; }).join("")}</div></section>`;
   };
 
   const renderStudy = () => {
@@ -1147,8 +1220,15 @@
     state.masteryScore = score.percent;
     const passed = score.percent >= pack.topic.passMark;
     state.masteryPassed = passed;
-    if (passed) state.completedSections[getSection().id] = true;
     const section = getSection();
+    if (passed) {
+      state.completedSections[section.id] = true;
+      completeAllMicroLessons(section);
+      if (!state.celebratedSections[section.id]) {
+        state.celebratedSections[section.id] = true;
+        state.celebration = { title: "Section đã hoàn thành", text: `Bạn đã vượt qua ${section.title}. Chặng tiếp theo đã sẵn sàng.`, section: section.title };
+      }
+    }
     return `${pageHeader("SECTION MASTERY · KẾT QUẢ", passed ? "Section đã được mở khóa" : "Cần thêm một vòng remediation", passed ? `Bạn đã chứng minh có thể dùng kiến thức ${escapeHtml(section.title)} trong các câu hỏi mới.` : "Không sao — hệ thống giữ lại đúng phần gap để bạn ôn rồi thử lại.", `<span class="pass-rule ${passed ? "is-passed" : "is-retry"}"><strong>${score.percent}%</strong><small>${passed ? "passed" : "chưa đạt"}</small></span>`)}<div class="mastery-result-card ${passed ? "is-pass" : "is-fail"}><div class="result-symbol">${passed ? icon("check") : icon("refresh")}</div><div><span class="panel-kicker">${passed ? "MASTERY PASSED" : "TARGETED RETEST"}</span><h2>${passed ? "Bạn có thể đi tiếp" : "Gap vẫn còn ở phần ứng dụng"}</h2><p>${passed ? "Section tiếp theo đã sẵn sàng mở. Lộ trình được cập nhật theo tiến độ mới." : "Ôn lại ví dụ, viết explain-back ngắn và làm lại test. Chỉ câu sai mới được đưa vào vòng ôn tiếp theo."}</p></div></div><div class="mastery-score-grid"><div><strong>${score.correct}/${score.total}</strong><span>câu đúng</span></div><div><strong>${score.percent}%</strong><span>kết quả</span></div><div><strong>80%</strong><span>ngưỡng pass</span></div></div><div class="result-cta panel-card"><div><span class="panel-kicker">${passed ? "NEXT STEP" : "RECOVERY PATH"}</span><h2>${passed ? "Tiếp tục lộ trình" : "Ôn lại đúng điểm chưa chắc"}</h2><p>${passed ? "Section tiếp theo được mở trong roadmap. Bạn vẫn có thể quay lại xem lại section này." : "Khi retest đạt 80%, section tiếp theo mới được mở."}</p></div><div>${passed ? `<button class="primary-button" type="button" data-action="next-section">Mở section tiếp theo ${icon("arrow")}</button>` : `<button class="primary-button" type="button" data-action="start-remediation">Mở remediation ${icon("arrow")}</button>`}</div></div>`;
   };
 
@@ -1291,10 +1371,28 @@
   };
 
   const render = () => {
+    const renderCelebration = () => {
+      if (!state.celebration) return "";
+      return `<section class="celebration-overlay" role="dialog" aria-modal="true" aria-labelledby="celebration-title"><div class="celebration-card"><span class="celebration-kicker">SECTION COMPLETE</span><div class="celebration-mark" aria-hidden="true">✦</div><h2 id="celebration-title">${escapeHtml(state.celebration.title)}</h2><p>${escapeHtml(state.celebration.text)}</p><strong>${escapeHtml(state.celebration.section)}</strong><button class="primary-button" type="button" data-action="dismiss-celebration">Tiếp tục hành trình ${icon("arrow")}</button></div></section>`;
+    };
     const viewChanged = Boolean(lastRenderedView) && lastRenderedView !== state.view;
+    if (state.view === "study") startStudyClock(); else flushStudyTime(true);
     persistState();
     const view = ["diagnostic-result"].includes(state.view) ? renderDiagnosticResult : state.view === "setup" ? renderSetup : state.view === "overview" ? renderOverview : state.view === "diagnostic" ? renderDiagnostic : state.view === "diagnostic-loading" ? renderLoading : ["assessment-loading", "mastery-loading"].includes(state.view) ? renderAssessmentLoading : state.view === "roadmap" ? renderRoadmap : state.view === "study" ? renderStudy : state.view === "mastery" ? (state.masterySubmitted ? renderMasteryResult : renderMastery) : state.view === "remediation-loading" ? renderRemediationLoading : state.view === "remediation" ? renderRemediation : state.view === "tutor" ? renderTutor : state.view === "assessment" ? renderAssessment : renderSetup;
-    viewContainer.innerHTML = view();
+    const renderedView = view();
+    const viewWithMicroLessons = state.view === "study" ? renderedView.replace('<div class="study-layout">', `${renderMicroLessonRail(getSection())}<div class="study-layout">`) : renderedView;
+    viewContainer.innerHTML = `${renderCelebration()}${viewWithMicroLessons}`;
+    if (state.view === "study") {
+      const studySection = getSection();
+      const totalMicroLessons = microLessons(studySection).length;
+      const studyProgress = state.studyCompleted ? 100 : Math.round(((totalMicroLessons ? completedMicroCount(studySection) / totalMicroLessons : 1) * 70) + ((studySection.checklist.length ? state.studyChecks.length / studySection.checklist.length : 1) * 30));
+      const progressValue = viewContainer.querySelector?.(".study-progress-row strong");
+      const progressBar = viewContainer.querySelector?.(".study-progress-row .progress-bar i");
+      const progressNote = viewContainer.querySelector?.(".study-progress-note");
+      if (progressValue) progressValue.textContent = `${studyProgress}%`;
+      if (progressBar) progressBar.style.width = `${studyProgress}%`;
+      if (progressNote) progressNote.textContent = state.studyCompleted ? "Sẵn sàng làm mastery test" : `${completedMicroCount(studySection)}/${totalMicroLessons} micro-lesson · ${state.studyChecks.length}/${studySection.checklist.length} checklist`;
+    }
     if (viewChanged) {
       viewContainer.classList.remove("view-enter");
       void viewContainer.offsetWidth;
@@ -1338,15 +1436,6 @@
       if (nextButton) nextButton.innerHTML = `Xem hành trình mới ${icon("arrow")}`;
     }
     if (state.view === "roadmap" && state.roadmapAnimation) window.requestAnimationFrame(playRoadmapAnimation);
-  };
-
-  const reset = () => {
-    pack = staticPack;
-    Object.assign(state, { view: "setup", profileConfigured: false, pathTopic: "", pathLevel: "new", pathMinutes: "", newPathDraft: null, topicBlueprint: null, diagnosticIndex: 0, diagnosticAnswers: {}, diagnosticConfidence: {}, diagnosticSubmitted: false, diagnosticSkipped: false, assessmentQuestions: { diagnostic: [], mastery: {}, final: [] }, assessmentMeta: { diagnostic: null, mastery: {}, final: null }, aiAnalysis: null, agentMeta: null, recommendedPath: [], selectedSectionId: "section-ml-foundations", timePlan: 30, focusStarted: false, studyCompleted: false, studyChecks: [], masteryIndex: 0, masteryAnswers: {}, masterySubmitted: false, masteryScore: null, masteryPassed: false, completedSections: {}, roadmapAnimation: null, remediationData: null, remediationText: "", remediationChecked: false, remediationLoading: false, discoveredSources: {}, sourceDiscoveryLoading: false, generatedPackages: {}, packageLoading: false, studyContentLoading: "", studySlideIndices: {}, finalStarted: false, finalIndex: 0, finalAnswers: {}, finalSubmitted: false, finalScore: null, tutorLoading: false, tutorMessages: [{ role: "assistant", text: "Bạn có thể hỏi về problem framing, supervised learning, regression, overfitting hoặc model evaluation. Mình sẽ trả lời dựa trên tài liệu đã được gắn nguồn.", sources: [], confidence: "high" }] });
-    try { localStorage.removeItem(stateStorageKey()); } catch {}
-    window.history.replaceState(null, "", "#setup");
-    render();
-    showToast("Đã đặt lại toàn bộ phiên demo.");
   };
 
   const chooseDiagnosticAnswer = (index) => {
@@ -1488,7 +1577,7 @@
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
-    if (action === "reset") reset();
+    if (action === "dismiss-celebration") { state.celebration = null; persistState(); render(); return; }
     if (action === "open-current-path") { openCurrentPath(); return; }
     if (action === "new-path") { openNewPath(); return; }
     if (action === "toggle-sidebar") {
@@ -1530,6 +1619,10 @@
         pack = staticPack;
         state.selectedSectionId = staticPack.sections[0]?.id || "section-ml-foundations";
         state.completedSections = {};
+        state.completedMicroLessons = {};
+        state.studyTimeByDay = {};
+        state.celebration = null;
+        state.celebratedSections = {};
         state.focusStarted = false;
         state.studyCompleted = false;
         state.studyChecks = [];
@@ -1598,13 +1691,26 @@
       state.focusStarted = false;
       setView("study");
     }
+    if (action === "open-roadmap-micro") {
+      const selectedSection = getSection(target.dataset.sectionId);
+      const selectedIndex = pack.sections.findIndex((section) => section.id === selectedSection.id);
+      const status = sectionState(selectedSection, selectedIndex);
+      if (status !== "current" && status !== "complete") { showToast("Hãy mở chặng này trước."); return; }
+      state.selectedSectionId = selectedSection.id;
+      state.studyChecks = state.completedSections[selectedSection.id] ? selectedSection.checklist.map((_, index) => index) : [];
+      state.studyCompleted = Boolean(state.completedSections[selectedSection.id]);
+      state.studySlideIndices[selectedSection.id] = Math.max(1, Number(target.dataset.microIndex || 0) + 1);
+      markMicroLessonComplete(selectedSection, Number(target.dataset.microIndex || 0));
+      setView("study");
+    }
     if (action === "discover-sources") discoverSources();
     if (action === "generate-package") generateLearningPackage();
     if (action === "prev-slide") moveStudySlide(-1);
     if (action === "next-slide") moveStudySlide(1);
-    if (action === "select-slide") { state.studySlideIndices[state.selectedSectionId] = Number(target.dataset.index) || 0; persistState(); render(); }
+    if (action === "open-micro-lesson") { const section = getSection(); const microIndex = Number(target.dataset.index); state.studySlideIndices[section.id] = Math.max(1, microIndex + 1); markMicroLessonComplete(section, microIndex); render(); document.querySelector(".learning-deck")?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" }); }
+    if (action === "select-slide") { const slideIndex = Number(target.dataset.index) || 0; state.studySlideIndices[state.selectedSectionId] = slideIndex; if (slideIndex > 0) markMicroLessonComplete(getSection(), Math.min(microLessons(getSection()).length - 1, slideIndex - 1)); persistState(); render(); }
     if (action === "toggle-check") { const item = Number(target.dataset.index); state.studyChecks = state.studyChecks.includes(item) ? state.studyChecks.filter((index) => index !== item) : [...state.studyChecks, item]; render(); }
-    if (action === "complete-study") { const section = getSection(); if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; render(); showToast("Section đã được đánh dấu hoàn thành. Mastery test đã mở."); }
+    if (action === "complete-study") { const section = getSection(); const remainingMicroLessons = microLessons(section).length - completedMicroCount(section); if (remainingMicroLessons > 0) { showToast(`Hãy xem hết ${remainingMicroLessons} micro-lesson còn lại trước khi mở mastery test.`); return; } if (state.studyChecks.length < section.checklist.length) { showToast(`Hãy hoàn thành ${section.checklist.length - state.studyChecks.length} mục checklist trước khi mở mastery test.`); return; } state.studyCompleted = true; completeAllMicroLessons(section); persistState(); render(); showToast("Section đã được đánh dấu hoàn thành. Mastery test đã mở."); }
     if (action === "start-mastery") { if (!state.studyCompleted) { showToast("Hãy hoàn thành section trước khi làm mastery test."); return; } state.masteryIndex = 0; state.masteryAnswers = {}; state.masterySubmitted = false; state.remediationData = null; state.remediationText = ""; state.remediationChecked = false; loadAssessment("mastery", state.selectedSectionId); }
     if (action === "answer-mastery") chooseMasteryAnswer(Number(target.dataset.index));
     if (action === "mastery-next") { const questions = activeMasteryQuestions(); const question = questions[state.masteryIndex]; if (state.masteryAnswers[question.id] === undefined) { showToast("Hãy chọn một phương án trước."); return; } if (state.masteryIndex < questions.length - 1) { state.masteryIndex += 1; render(); } else { state.masterySubmitted = true; render(); } }
@@ -1676,6 +1782,11 @@
   };
   window.addEventListener("hashchange", syncViewFromLocation);
   window.addEventListener("popstate", syncViewFromLocation);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) flushStudyTime(true);
+    else if (state.view === "study") startStudyClock();
+  });
+  window.addEventListener("beforeunload", () => flushStudyTime(true));
   const bootstrapAuth = async () => {
     if (API_BASE) {
       const token = readAuthToken();

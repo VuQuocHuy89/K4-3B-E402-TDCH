@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "Pathwise adaptive learning demo with a Node.js backend",
   "scripts": {
-    "start": "node server/index.js"
+    "start": "node server/index.js",
+    "test": "node --test scripts/learning-contracts.test.js"
   },
   "engines": {
     "node": ">=20"
