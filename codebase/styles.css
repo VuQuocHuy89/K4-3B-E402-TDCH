@@ -284,3 +284,108 @@ svg { width: 17px; height: 17px; display: block; }
 .mistake-row p { margin: 1px 0 0; font-size: 10px; line-height: 1.45; }
 @media (max-width: 820px) { .lesson-detail-grid { grid-template-columns: 1fr; } .lesson-detail-card { min-height: auto; } }
 @media (max-width: 600px) { .topic-input-card { margin-left: 0; } .topic-input-footer, .lesson-deep-dive-header { align-items: flex-start; flex-direction: column; } .depth-badge { align-self: flex-start; } }
+
+/* Gamified learning journey */
+.journey-header-actions { display: flex; align-items: center; gap: 12px; }
+.journey-header-actions > .outline-button { min-height: 44px; }
+.journey-overview { display: grid; grid-template-columns: minmax(0, 1fr) 112px minmax(300px, .72fr); gap: 24px; align-items: center; padding: 22px 24px; overflow: hidden; background: linear-gradient(120deg, #fff 0%, #f5f5ff 55%, #ecfdf5 130%); border: 1px solid #dfe1ff; border-radius: 20px; box-shadow: var(--shadow-sm); }
+.journey-overview-copy h2 { margin: 5px 0 4px; font-size: 21px; letter-spacing: -.04em; }
+.journey-overview-copy p { max-width: 570px; margin: 0; color: var(--ink-2); font-size: 11px; line-height: 1.55; }
+.journey-progress { display: grid; place-items: center; }
+.journey-progress-ring { display: grid; width: 100px; height: 100px; place-content: center; text-align: center; background: radial-gradient(circle at center, #fff 58%, transparent 59%), conic-gradient(var(--mint) calc(var(--journey-progress) * 1%), #dfe5ee 0); border-radius: 50%; box-shadow: 0 0 0 7px rgba(79,70,229,.05); }
+.journey-progress-ring strong, .journey-progress-ring span { display: block; }
+.journey-progress-ring strong { color: var(--ink); font-size: 24px; line-height: 1; letter-spacing: -.06em; font-variant-numeric: tabular-nums; }
+.journey-progress-ring span { margin-top: 5px; color: var(--muted); font-size: 8px; font-weight: 800; text-transform: uppercase; }
+.journey-facts { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 0; }
+.journey-facts div { padding: 10px 12px; background: rgba(255,255,255,.82); border: 1px solid rgba(199,210,254,.8); border-radius: 11px; }
+.journey-facts dt { color: var(--muted); font-size: 8px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; }
+.journey-facts dd { margin: 3px 0 0; color: var(--indigo-dark); font-size: 16px; font-weight: 850; font-variant-numeric: tabular-nums; }
+.journey-legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px 20px; margin: 20px 0 12px; color: var(--ink-2); font-size: 10px; font-weight: 700; }
+.journey-legend > span { display: inline-flex; align-items: center; gap: 7px; }
+.legend-swatch { display: grid; width: 21px; height: 21px; place-items: center; background: #fff; border: 2px solid #cbd5e1; border-radius: 50%; }
+.legend-swatch svg { width: 12px; height: 12px; }
+.legend-swatch.is-complete { color: #fff; background: var(--mint); border-color: var(--mint); }
+.legend-swatch.is-current { background: var(--indigo); border-color: #fff; box-shadow: 0 0 0 3px rgba(79,70,229,.2); }
+
+.journey-map { position: relative; width: 100%; height: 1850px; overflow: hidden; isolation: isolate; background: radial-gradient(circle at 20% 10%, rgba(129,140,248,.16), transparent 20%), radial-gradient(circle at 80% 32%, rgba(22,163,74,.1), transparent 20%), radial-gradient(circle at 20% 68%, rgba(245,158,11,.12), transparent 21%), linear-gradient(180deg, #f7f7ff 0%, #f4fbff 46%, #f7fff7 100%); border: 1px solid #dde3f0; border-radius: 28px; box-shadow: 0 25px 65px rgba(49,46,129,.09); }
+.journey-map::after { position: absolute; inset: 0; z-index: -3; content: ""; opacity: .32; background-image: linear-gradient(rgba(79,70,229,.08) 1px, transparent 1px), linear-gradient(90deg, rgba(79,70,229,.08) 1px, transparent 1px); background-size: 40px 40px; mask-image: linear-gradient(to bottom, #000, transparent 84%); }
+.journey-sky { position: absolute; inset: 0; z-index: -1; pointer-events: none; }
+.journey-sky i { position: absolute; width: 8px; height: 8px; background: #818cf8; border-radius: 50%; box-shadow: 0 0 0 7px rgba(129,140,248,.1); }
+.journey-sky i:nth-child(1) { top: 6%; left: 48%; }.journey-sky i:nth-child(2) { top: 24%; left: 10%; }.journey-sky i:nth-child(3) { top: 45%; right: 9%; }.journey-sky i:nth-child(4) { top: 66%; left: 48%; }.journey-sky i:nth-child(5) { top: 84%; left: 14%; }
+.journey-road { position: absolute; top: 0; right: 0; left: 0; z-index: 0; width: 100%; height: 1660px; overflow: visible; }
+.journey-road path { fill: none; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.road-shadow { stroke: rgba(49,46,129,.14); stroke-width: 72; transform: translateY(8px); }
+.road-base { stroke: url(#journey-road-gradient); stroke-width: 64; }
+.road-center { stroke: rgba(255,255,255,.62); stroke-width: 4; stroke-dasharray: 12 16; }
+.road-progress { stroke: #16a34a; stroke-width: 8; filter: drop-shadow(0 0 7px rgba(22,163,74,.42)); }
+
+.journey-micro-point, .journey-checkpoint, .journey-avatar { position: absolute; z-index: 4; left: var(--point-x); top: var(--point-y); }
+.journey-micro-point { display: grid; width: 28px; height: 28px; place-items: center; color: #64748b; background: #fff; border: 3px solid #cbd5e1; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 5px 13px rgba(49,46,129,.16); }
+.journey-micro-point > i { font-size: 8px; font-style: normal; font-weight: 900; }
+.journey-micro-point > svg { width: 22px; height: 26px; transform: translate(6px, -7px); filter: drop-shadow(0 3px 3px rgba(13,100,72,.2)); }
+.journey-micro-point.is-complete { color: var(--mint); background: #ecfdf5; border-color: var(--mint); }
+.journey-micro-point b { position: absolute; top: 34px; left: 50%; width: max-content; max-width: 150px; padding: 5px 8px; color: #fff; background: var(--ink); border-radius: 6px; font-size: 8px; font-weight: 750; opacity: 0; pointer-events: none; transform: translate(-50%, -4px); transition: opacity 160ms ease, transform 160ms ease; }
+.journey-micro-point:hover b { opacity: 1; transform: translate(-50%, 0); }
+
+.journey-checkpoint { width: 0; height: 0; }
+.checkpoint-pin { position: absolute; z-index: 3; display: grid; width: 62px; height: 62px; place-items: center; color: #64748b; background: #fff; border: 5px solid #cbd5e1; border-radius: 50%; transform: translate(-50%, -50%); box-shadow: 0 9px 20px rgba(49,46,129,.2); }
+.checkpoint-pin > span { display: grid; width: 35px; height: 35px; place-items: center; color: #fff; background: #94a3b8; border-radius: 50%; font-size: 11px; font-weight: 900; }
+.checkpoint-pin svg { width: 20px; height: 20px; }
+.journey-checkpoint.current .checkpoint-pin { border-color: #fff; box-shadow: 0 0 0 7px rgba(79,70,229,.18), 0 10px 24px rgba(49,46,129,.25); }
+.journey-checkpoint.current .checkpoint-pin > span { background: var(--indigo); }
+.journey-checkpoint.complete .checkpoint-pin { color: #fff; background: var(--mint); border-color: #fff; }
+.journey-checkpoint.complete .checkpoint-pin > span { background: var(--mint); }
+.journey-checkpoint.locked .checkpoint-pin, .journey-checkpoint.next .checkpoint-pin { opacity: .72; }
+.checkpoint-card { position: absolute; top: -88px; width: 290px; min-height: 188px; padding: 15px; background: rgba(255,255,255,.96); border: 1px solid #dbe2ee; border-radius: 18px; box-shadow: 0 16px 40px rgba(30,41,59,.12); backdrop-filter: blur(12px); }
+.journey-checkpoint.is-left .checkpoint-card { left: 50px; }
+.journey-checkpoint.is-right .checkpoint-card { right: 50px; }
+.journey-checkpoint.current .checkpoint-card { border-color: #a8a7ff; box-shadow: 0 18px 45px rgba(79,70,229,.18), 0 0 0 3px rgba(79,70,229,.07); }
+.journey-checkpoint.locked .checkpoint-card, .journey-checkpoint.next .checkpoint-card { filter: saturate(.55); opacity: .8; }
+.checkpoint-card-top { display: grid; grid-template-columns: 72px 1fr; gap: 11px; align-items: center; }
+.reward-art { width: 72px; height: 72px; }
+.checkpoint-card h2 { margin: 4px 0 0; color: var(--ink); font-size: 14px; line-height: 1.25; letter-spacing: -.025em; }
+.checkpoint-card > p { margin: 10px 0; color: var(--ink-2); font-size: 9px; line-height: 1.5; }
+.checkpoint-reward { display: grid; grid-template-columns: 76px 1fr; gap: 1px 8px; padding: 8px 9px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 9px; }
+.checkpoint-reward > span { grid-row: 1 / 3; align-self: center; color: var(--muted); font-size: 7px; font-weight: 900; letter-spacing: .09em; }
+.checkpoint-reward strong { color: var(--indigo-dark); font-size: 9px; }
+.checkpoint-reward small { color: var(--muted); font-size: 7px; line-height: 1.35; }
+.checkpoint-meta { display: flex; flex-wrap: wrap; gap: 8px 12px; margin: 9px 0; color: var(--muted); font-size: 8px; font-weight: 700; }
+.checkpoint-meta span { display: inline-flex; align-items: center; gap: 4px; }
+.checkpoint-meta svg { width: 11px; height: 11px; }
+.checkpoint-card .compact-button { min-height: 44px; }
+.checkpoint-locked { display: inline-flex; align-items: center; gap: 5px; min-height: 38px; color: #64748b; font-size: 8px; font-weight: 750; }
+.checkpoint-locked svg { width: 13px; height: 13px; }
+.recommended-ribbon { position: absolute; top: -9px; right: 17px; padding: 5px 9px; color: #713f12; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 999px; font-size: 7px; font-weight: 900; letter-spacing: .08em; }
+
+.journey-avatar { z-index: 8; width: 74px; transform: translate(-50%, -91%); filter: drop-shadow(0 12px 10px rgba(49,46,129,.16)); pointer-events: none; }
+.journey-avatar > svg { width: 74px; height: 106px; animation: avatar-float 2.8s ease-in-out infinite; transform-origin: center bottom; }
+.journey-avatar > span { position: absolute; top: -22px; left: 50%; width: max-content; padding: 5px 9px; color: #fff; background: var(--indigo-dark); border-radius: 999px; font-size: 8px; font-weight: 850; transform: translateX(-50%); box-shadow: 0 5px 14px rgba(49,46,129,.22); }
+.journey-avatar > span::after { position: absolute; left: 50%; bottom: -4px; width: 8px; height: 8px; content: ""; background: var(--indigo-dark); transform: translateX(-50%) rotate(45deg); }
+.journey-avatar.is-advancing > svg { animation: avatar-run 380ms ease-in-out infinite alternate; }
+@keyframes avatar-float { 0%,100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-5px) rotate(1deg); } }
+@keyframes avatar-run { from { transform: translateY(0) rotate(-4deg); } to { transform: translateY(-9px) rotate(4deg); } }
+
+.journey-checkpoint.is-finish .checkpoint-pin { width: 70px; height: 70px; color: #64748b; }
+.journey-checkpoint.is-finish.complete .checkpoint-pin { color: #fff; background: #f59e0b; }
+.finish-card { top: 56px !important; left: 50% !important; right: auto !important; display: grid; grid-template-columns: 92px 1fr; gap: 14px; width: 390px; min-height: auto; transform: translateX(-50%); }
+.finish-card > svg { width: 92px; height: 92px; }
+.finish-card h2 { font-size: 15px; }
+.finish-card p { margin: 6px 0 10px; color: var(--ink-2); font-size: 9px; line-height: 1.45; }
+.journey-note { display: grid; grid-template-columns: 34px 1fr auto; gap: 12px; align-items: center; margin-top: 14px; padding: 16px 18px; background: #fff; border: 1px solid var(--line); border-radius: 14px; }
+.journey-note strong { font-size: 11px; }
+.journey-note p { margin: 3px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
+
+@media (max-width: 1020px) {
+  .journey-overview { grid-template-columns: 1fr 100px; }.journey-facts { grid-column: 1 / -1; grid-template-columns: repeat(4, 1fr); }.checkpoint-card { width: 255px; }.checkpoint-card-top { grid-template-columns: 62px 1fr; }.reward-art { width: 62px; height: 62px; }
+}
+@media (max-width: 760px) {
+  .journey-header-actions { align-items: stretch; flex-direction: column; }.journey-header-actions > button { width: 100%; }.journey-overview { grid-template-columns: 1fr 88px; padding: 18px; }.journey-overview-copy h2 { font-size: 18px; }.journey-progress-ring { width: 80px; height: 80px; }.journey-progress-ring strong { font-size: 20px; }.journey-facts { grid-template-columns: repeat(2, 1fr); }.journey-legend { justify-content: flex-start; }
+  .journey-map { height: 1850px; border-radius: 20px; }.journey-road { display: none; }.journey-map::before { position: absolute; z-index: 0; top: 80px; bottom: 180px; left: 31px; width: 22px; content: ""; background: linear-gradient(90deg, #4338ca, #6366f1); border: 6px solid #fff; border-radius: 999px; box-shadow: 0 0 0 3px rgba(79,70,229,.14), 0 8px 18px rgba(49,46,129,.16); }
+  .journey-micro-point, .journey-checkpoint, .journey-avatar { left: 31px; }.journey-micro-point b { display: none; }.checkpoint-pin { width: 52px; height: 52px; }.checkpoint-pin > span { width: 30px; height: 30px; }.checkpoint-card, .journey-checkpoint.is-left .checkpoint-card, .journey-checkpoint.is-right .checkpoint-card { top: -92px; right: auto; left: 42px; width: min(265px, calc(100vw - 116px)); padding: 12px; }.checkpoint-card-top { grid-template-columns: 52px 1fr; }.reward-art { width: 52px; height: 52px; }.checkpoint-card h2 { font-size: 12px; }.checkpoint-card > p { display: none; }.checkpoint-reward { grid-template-columns: 1fr; }.checkpoint-reward > span { grid-row: auto; }.checkpoint-reward small { display: none; }.checkpoint-meta { margin: 7px 0; }.recommended-ribbon { right: 10px; }.journey-avatar { width: 62px; }.journey-avatar > svg { width: 62px; height: 89px; }.journey-avatar > span { top: -18px; }.finish-card, .journey-checkpoint.is-finish .finish-card { top: 48px !important; left: 42px !important; grid-template-columns: 60px 1fr; width: min(265px, calc(100vw - 116px)); transform: none; }.finish-card > svg { width: 60px; height: 60px; }.journey-note { grid-template-columns: 34px 1fr; }.journey-note .link-button { grid-column: 2; justify-self: start; }
+}
+@media (max-width: 420px) {
+  .journey-overview { grid-template-columns: 1fr; }.journey-progress { justify-content: start; }.journey-facts { gap: 6px; }.journey-facts div { padding: 8px; }.journey-checkpoint .checkpoint-card { width: calc(100vw - 104px); left: 36px; }.finish-card, .journey-checkpoint.is-finish .finish-card { left: 36px !important; width: calc(100vw - 104px); }.checkpoint-card .compact-button { width: 100%; }.journey-note { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .journey-avatar > svg, .journey-avatar.is-advancing > svg { animation: none !important; }.journey-micro-point, .reward-art { animation: none !important; }
+}
