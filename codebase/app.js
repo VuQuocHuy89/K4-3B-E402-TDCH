@@ -176,6 +176,37 @@
     reason: "Bạn đã chọn bắt đầu từ số 0. Hệ thống bỏ qua bài test đầu vào và dựng roadmap nền tảng theo mục tiêu cùng thời lượng của bạn.",
   });
 
+  const sidebarMedia = window.matchMedia("(max-width: 760px)");
+  let sidebarCollapsed = false;
+  try { sidebarCollapsed = localStorage.getItem("pathwise-sidebar-collapsed") === "true"; } catch {}
+  const syncSidebar = () => {
+    const sidebar = document.querySelector(".sidebar");
+    const expanded = sidebarMedia.matches ? sidebar.classList.contains("is-open") : !sidebarCollapsed;
+    document.body.classList.toggle("sidebar-collapsed", sidebarCollapsed);
+    sidebar.inert = sidebarMedia.matches && !expanded;
+    document.querySelectorAll('[data-action="toggle-sidebar"]').forEach((button) => {
+      const label = expanded ? (sidebarMedia.matches ? "Đóng thanh bên" : "Thu gọn thanh bên") : "Mở rộng thanh bên";
+      button.setAttribute("aria-expanded", String(expanded));
+      button.setAttribute("aria-controls", "workspace-sidebar");
+      button.setAttribute("aria-label", label);
+      button.title = label;
+    });
+  };
+  const closeSidebar = () => {
+    const sidebar = document.querySelector(".sidebar");
+    if (sidebarMedia.matches && sidebar.contains(document.activeElement)) document.querySelector(".mobile-menu")?.focus();
+    sidebar.classList.remove("is-open");
+    syncSidebar();
+  };
+  sidebarMedia.addEventListener("change", closeSidebar);
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") closeSidebar(); });
+  document.querySelectorAll(".nav-item, .sidebar-link").forEach((item) => {
+    const label = item.querySelector("span:nth-child(2)")?.textContent || item.textContent.trim();
+    item.setAttribute("aria-label", label);
+    item.title = label;
+  });
+  syncSidebar();
+
   const setView = (view, options = {}) => {
     state.view = view;
     if (options.hash !== false) window.history.replaceState(null, "", `#${view}`);
@@ -594,16 +625,33 @@
   document.addEventListener("click", (event) => {
     const nav = event.target.closest("[data-view]");
     if (nav) {
+      if (!state.profileConfigured && nav.dataset.view !== "setup") {
+        showToast("Hãy thiết lập mục tiêu học tập trước khi mở workspace.");
+        closeSidebar();
+        return;
+      }
       setView(nav.dataset.view);
-      document.querySelector(".sidebar")?.classList.remove("is-open");
+      closeSidebar();
       return;
     }
     const target = event.target.closest("[data-action]");
     if (!target) return;
     const action = target.dataset.action;
     if (action === "reset") reset();
-    if (action === "toggle-sidebar") document.querySelector(".sidebar")?.classList.toggle("is-open");
-    if (action === "topic-menu") setView("setup");
+    if (action === "toggle-sidebar") {
+      if (sidebarMedia.matches) {
+        if (document.querySelector(".sidebar").classList.contains("is-open")) closeSidebar();
+        else document.querySelector(".sidebar").classList.add("is-open");
+      }
+      else {
+        sidebarCollapsed = !sidebarCollapsed;
+        try { localStorage.setItem("pathwise-sidebar-collapsed", String(sidebarCollapsed)); } catch {}
+      }
+      syncSidebar();
+      if (sidebarMedia.matches && document.querySelector(".sidebar").classList.contains("is-open")) document.querySelector(".sidebar-toggle").focus();
+    }
+    if (action === "close-sidebar") closeSidebar();
+    if (action === "topic-menu") { setView("setup"); closeSidebar(); }
     if (action === "notification") showToast("Bạn có thể chỉnh thời gian học trong learning roadmap.");
     if (action === "profile") showToast("Hồ sơ học tập của Vũ Quốc Huy · K4 · 3B.");
     if (action === "fill-topic") { state.pathTopic = target.dataset.topic; persistState(); render(); document.querySelector("#path-topic")?.focus(); }
