@@ -27,6 +27,8 @@ services:
         sync: false
       - key: DOCUMENT_PDF_CACHE_PATH
         value: /tmp/pathwise-document.pdf
+      - key: CONTENT_CATALOG_VERSION
+        value: seed-v1
 
 databases:
   - name: pathwise-db

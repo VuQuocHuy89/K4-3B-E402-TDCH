@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const pack = window.CONTENT_PACK;
+  let pack = window.CONTENT_PACK;
   const viewContainer = document.querySelector("#view-container");
   const appShell = document.querySelector("#app-shell");
   const authGate = document.querySelector("#auth-gate");
@@ -27,6 +27,7 @@
   let cloudSessionKey = "";
   let cloudHydrated = !API_BASE;
   let cloudSaveTimer = null;
+  let contentSource = API_BASE ? "static-loading" : "static-fallback";
 
   const state = {
     view: window.location.hash.replace("#", "") || "setup",
@@ -117,6 +118,18 @@
   const clearAuthToken = () => setAuthToken("");
   const readAuthToken = () => { try { return localStorage.getItem(AUTH_TOKEN_KEY) || ""; } catch { return ""; } };
   const authHeaders = (headers = {}) => authToken ? { ...headers, Authorization: `Bearer ${authToken}` } : headers;
+  const hydrateContentCatalog = async () => {
+    if (!API_BASE || !authToken) { contentSource = "static-fallback"; return; }
+    try {
+      const response = await fetch(`${API_BASE}/api/content/catalog`, { headers: authHeaders(), signal: AbortSignal.timeout(8000) });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || !payload.content?.topic?.id || !Array.isArray(payload.content.sections)) throw new Error(payload.error || "content_catalog_unavailable");
+      pack = payload.content;
+      contentSource = "database";
+    } catch {
+      contentSource = "static-fallback";
+    }
+  };
   const getSessionUser = () => {
     try {
       const id = localStorage.getItem(AUTH_SESSION_KEY);
@@ -349,6 +362,7 @@
     cloudHydrated = !API_BASE;
     setAuthSession(user.id);
     migrateLegacyState(user.id);
+    await hydrateContentCatalog();
     restoreState();
     if (authGate) authGate.hidden = true;
     if (appShell) appShell.hidden = false;
@@ -535,8 +549,11 @@
       const response = await fetch(`${API_BASE}/api/health`);
       if (!response.ok) throw new Error("health_unavailable");
       const health = await response.json();
-      label.textContent = health.providers?.order?.length ? `AI live · ${health.providers.order[0]}` : "Local fallback";
-      badge.dataset.live = String(Boolean(health.providers?.order?.length));
+      const databaseReady = Boolean(health.database?.ready && contentSource === "database");
+      const documentReady = Boolean(health.document?.loaded);
+      label.textContent = databaseReady && documentReady ? "Production live" : databaseReady ? "DB live · PDF cần cấu hình" : "Backend fallback";
+      badge.dataset.live = String(databaseReady && documentReady);
+      badge.title = databaseReady && documentReady ? "Nội dung và tiến độ đang lấy từ production backend." : databaseReady ? "Database đã sẵn sàng nhưng tài liệu grounding chưa được nạp." : "Đang dùng fallback; kiểm tra kết nối backend.";
     } catch {
       label.textContent = "Static demo";
       badge.dataset.live = "false";

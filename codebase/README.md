@@ -45,3 +45,11 @@ PATHWISE_URL=http://127.0.0.1:4173 node scripts/run-cp3-central-measure.js --sav
 ```
 
 Kết quả tách riêng số case đạt ở cấp hệ thống, số lượt AI live và số lượt deterministic fallback; không gộp fallback thành độ chính xác của model. Chỉ nộp số liệu sau khi chạy với API key đã cấu hình và giữ nguyên quality bar đã chốt trong `spec.md`.
+
+## Production data path
+
+Khi chạy với `PATHWISE_API_BASE`, sau đăng nhập frontend gọi `/api/content/catalog` để lấy learning catalog đã publish từ PostgreSQL. `content-pack.js` chỉ còn là seed/fallback khi backend hoặc database chưa sẵn sàng. Tiến độ cá nhân vẫn được lưu qua `/api/session` theo user và được cache cục bộ để giao diện phản hồi nhanh.
+
+Trên Render cần cấu hình `DOCUMENT_PDF_URL` bằng một URL HTTPS ổn định tới file PDF được phép sử dụng. Server sẽ kiểm tra chữ ký PDF, tải vào `/tmp`, chạy `pdftotext` và báo `document.loaded` trong `/api/health`. Không dùng đường dẫn local trong repo cho production.
+
+Khi cập nhật nội dung seed, tăng `CONTENT_CATALOG_VERSION` để server upsert catalog mới vào database. Không coi việc LLM trả fallback là dữ liệu production: UI và trace phải phân biệt rõ live provider, database catalog và deterministic fallback.

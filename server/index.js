@@ -7,6 +7,7 @@ const crypto = require("node:crypto");
 const { execFile } = require("node:child_process");
 const { promisify } = require("node:util");
 const { URL } = require("node:url");
+const vm = require("node:vm");
 const {
   topicContext,
   sources,
@@ -33,6 +34,8 @@ const traceFile = process.env.AI_TRACE_FILE || "/tmp/pathwise-agent-trace.jsonl"
 const traceLimit = 12000;
 let dbPool = null;
 let dbInitError = null;
+let contentCatalogReady = false;
+const contentCatalogVersion = process.env.CONTENT_CATALOG_VERSION || "seed-v1";
 const memoryUsers = new Map();
 const memoryAuthSessions = new Map();
 if (process.env.DATABASE_URL) {
@@ -85,10 +88,18 @@ const initDatabase = async () => {
         state JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS content_catalog (
+        topic_id TEXT PRIMARY KEY,
+        version TEXT NOT NULL,
+        content JSONB NOT NULL,
+        is_published BOOLEAN NOT NULL DEFAULT TRUE,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       ALTER TABLE learning_sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
       CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx ON auth_sessions(user_id);
       CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx ON auth_sessions(expires_at)
     `);
+    await seedContentCatalog();
   } catch (error) {
     dbInitError = error.message;
   }
@@ -108,6 +119,28 @@ const saveSession = async (userId, sessionKey, state) => {
     [scopedSessionKey(userId, sessionKey), userId, JSON.stringify(state)],
   );
   return true;
+};
+
+const readContentCatalogSeed = async () => {
+  const sourcePath = path.join(codebaseDir, "content-pack.js");
+  const source = await fs.readFile(sourcePath, "utf8");
+  const sandbox = { window: {} };
+  vm.runInNewContext(source, sandbox, { filename: sourcePath, timeout: 1000 });
+  const content = sandbox.window.CONTENT_PACK;
+  if (!content?.topic?.id || !Array.isArray(content.sections) || !Array.isArray(content.sources)) throw new Error("content_catalog_seed_invalid");
+  return content;
+};
+
+const seedContentCatalog = async () => {
+  const content = await readContentCatalogSeed();
+  const existing = await dbPool.query("SELECT version FROM content_catalog WHERE topic_id = $1", [content.topic.id]);
+  if (!existing.rows[0] || existing.rows[0].version !== contentCatalogVersion) {
+    await dbPool.query(
+      "INSERT INTO content_catalog (topic_id, version, content, is_published, updated_at) VALUES ($1, $2, $3::jsonb, TRUE, NOW()) ON CONFLICT (topic_id) DO UPDATE SET version = EXCLUDED.version, content = EXCLUDED.content, is_published = TRUE, updated_at = NOW()",
+      [content.topic.id, contentCatalogVersion, JSON.stringify(content)],
+    );
+  }
+  contentCatalogReady = true;
 };
 
 const normaliseEmail = (value) => String(value || "").trim().toLowerCase();
@@ -746,10 +779,11 @@ const api = async (req, res, url) => {
   if (req.method === "OPTIONS") return json(res, 204, {});
   if (req.method === "GET" && pathname === "/api/health") return json(res, 200, {
     ok: true,
+    ready: Boolean(dbPool && !dbInitError && contentCatalogReady && documentState.loaded),
     topic: topicContext.title,
     document: { loaded: documentState.loaded, source: documentPdfUrl ? "remote-url" : "local-path", url_configured: Boolean(documentPdfUrl), file_name: documentState.fileName, pages: documentState.pages.length, error: documentState.error },
     providers: { order: providerOrder(), gemini: configured("gemini"), openrouter: configured("openrouter") },
-    database: { configured: Boolean(process.env.DATABASE_URL), ready: Boolean(dbPool && !dbInitError), error: dbInitError },
+    database: { configured: Boolean(process.env.DATABASE_URL), ready: Boolean(dbPool && !dbInitError), content_catalog_ready: contentCatalogReady, error: dbInitError },
   });
   if (pathname === "/api/auth/me" && req.method === "GET") {
     try {
@@ -787,6 +821,18 @@ const api = async (req, res, url) => {
     } catch (error) {
       if (error.code === "23505") return json(res, 409, { error: "email_exists", message: "Email này đã được đăng ký." });
       return json(res, 503, { error: "auth_unavailable", message: "Dịch vụ tài khoản tạm thời chưa sẵn sàng.", detail: error.message });
+    }
+  }
+  if (req.method === "GET" && pathname === "/api/content/catalog") {
+    const user = await authenticatedUser(req);
+    if (!user) return json(res, 401, { error: "unauthorized", message: "Vui lòng đăng nhập để tải learning content." });
+    if (!dbPool || dbInitError || !contentCatalogReady) return json(res, 503, { error: "content_catalog_unavailable", message: "Learning content chưa sẵn sàng." });
+    try {
+      const result = await dbPool.query("SELECT topic_id, version, content, updated_at FROM content_catalog WHERE is_published = TRUE ORDER BY updated_at DESC LIMIT 1");
+      const catalog = result.rows[0];
+      return catalog ? json(res, 200, { source: "database", topic_id: catalog.topic_id, version: catalog.version, content: catalog.content, updated_at: catalog.updated_at }) : json(res, 404, { error: "content_catalog_empty" });
+    } catch (error) {
+      return json(res, 503, { error: "content_catalog_unavailable", detail: error.message });
     }
   }
   if (req.method === "GET" && pathname === "/api/session") {
