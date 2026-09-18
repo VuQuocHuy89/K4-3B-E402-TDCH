@@ -1,0 +1,96 @@
+{
+  "generated_at": "2026-09-18T09:40:48.182Z",
+  "base_url": "http://127.0.0.1:4173",
+  "case_id": "central-analyze-01",
+  "input": {
+    "topic_id": "grokking-machine-learning",
+    "learner": {
+      "target_role": "AI Engineer",
+      "level": "beginner-to-intermediate"
+    },
+    "available_time_minutes": 45,
+    "answers": [
+      {
+        "question_id": "diag-ml-01",
+        "competency_id": "ml-foundations",
+        "answer_index": 0,
+        "is_correct": true,
+        "confidence": "high",
+        "source_ids": ["GML-CH01"]
+      },
+      {
+        "question_id": "diag-ml-02",
+        "competency_id": "learning-types",
+        "answer_index": 1,
+        "is_correct": false,
+        "confidence": "low",
+        "source_ids": ["GML-CH02"]
+      },
+      {
+        "question_id": "diag-ml-03",
+        "competency_id": "regression",
+        "answer_index": 0,
+        "is_correct": true,
+        "confidence": "medium",
+        "source_ids": ["GML-CH03"]
+      },
+      {
+        "question_id": "diag-ml-04",
+        "competency_id": "generalization",
+        "answer_index": 1,
+        "is_correct": false,
+        "confidence": "low",
+        "source_ids": ["GML-CH04"]
+      },
+      {
+        "question_id": "diag-ml-05",
+        "competency_id": "classification",
+        "answer_index": 0,
+        "is_correct": true,
+        "confidence": "medium",
+        "source_ids": ["GML-CH05-08"]
+      },
+      {
+        "question_id": "diag-ml-06",
+        "competency_id": "model-families",
+        "answer_index": 0,
+        "is_correct": true,
+        "confidence": "medium",
+        "source_ids": ["GML-CH04", "GML-CH09-12"]
+      }
+    ]
+  },
+  "pass": true,
+  "provider": "openrouter",
+  "model": "openai/gpt-4o",
+  "live": true,
+  "fallback_reason": null,
+  "status": "in_progress",
+  "recommended_path": [
+    {
+      "section_id": "section-learning-types",
+      "reason": "To address the high severity gap in understanding learning types.",
+      "estimated_minutes": 20
+    },
+    {
+      "section_id": "section-generalization",
+      "reason": "To address the high severity gap in understanding generalization and validation.",
+      "estimated_minutes": 25
+    }
+  ],
+  "competency_gaps": [
+    {
+      "competency_id": "learning-types",
+      "severity": "high",
+      "reason": "The learner answered incorrectly with low confidence on a question related to learning types.",
+      "source_ids": ["GML-CH02"]
+    },
+    {
+      "competency_id": "generalization",
+      "severity": "high",
+      "reason": "The learner answered incorrectly with low confidence on a question related to generalization and validation.",
+      "source_ids": ["GML-CH04"]
+    }
+  ],
+  "latency_ms": 4009
+}
