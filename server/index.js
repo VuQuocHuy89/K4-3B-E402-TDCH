@@ -885,4 +885,4 @@ const server = http.createServer((req, res) => {
   return serve(req, res, url.pathname);
 });
 
-Promise.all([loadDocument(), initDatabase()]).finally(() => server.listen(port, "0.0.0.0", () => console.log(`Pathwise server running at http://localhost:${port} · document=${documentState.loaded ? documentState.fileName : documentState.error} · providers=${providerOrder().join(",") || "fallback"} · database=${dbPool && !dbInitError ? "ready" : "disabled"}`)));
+Promise.all([loadDocument(), initDatabase()]).finally(() => server.listen(port, "0.0.0.0", () => console.log(`Pathwise server running at http://localhost:${port} · document=${documentState.loaded ? documentState.fileName : documentState.error} · providers=${providerOrder().join(",") || "fallback"} · database=${dbPool && !dbInitError ? "ready" : "disabled"} · content=${contentCatalogReady ? "ready" : "fallback"}`)));
