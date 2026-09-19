@@ -96,9 +96,18 @@ const initDatabase = async () => {
         is_published BOOLEAN NOT NULL DEFAULT TRUE,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS lesson_feedback (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        section_id TEXT NOT NULL,
+        category TEXT NOT NULL CHECK (category IN ('bug', 'suggestion')),
+        message TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       ALTER TABLE learning_sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
       CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx ON auth_sessions(user_id);
-      CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx ON auth_sessions(expires_at)
+      CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx ON auth_sessions(expires_at);
+      CREATE INDEX IF NOT EXISTS lesson_feedback_section_id_idx ON lesson_feedback(section_id)
     `);
     await seedContentCatalog();
   } catch (error) {
@@ -120,6 +129,17 @@ const saveSession = async (userId, sessionKey, state) => {
     [scopedSessionKey(userId, sessionKey), userId, JSON.stringify(state)],
   );
   return true;
+};
+
+const feedbackCategoryIsValid = (value) => value === "bug" || value === "suggestion";
+const feedbackMessageIsValid = (value) => typeof value === "string" && value.trim().length >= 3 && value.trim().length <= 2000;
+const saveFeedback = async (userId, sectionId, category, message) => {
+  const id = crypto.randomUUID();
+  await dbPool.query(
+    "INSERT INTO lesson_feedback (id, user_id, section_id, category, message) VALUES ($1, $2, $3, $4, $5)",
+    [id, userId, sectionId, category, message.trim()],
+  );
+  return id;
 };
 
 const readContentCatalogSeed = async () => {
@@ -1111,6 +1131,23 @@ const api = async (req, res, url) => {
       return saved ? json(res, 200, { enabled: true, saved: true }) : json(res, 400, { enabled: true, error: "invalid_session" });
     } catch (error) {
       return json(res, 503, { enabled: true, error: "database_unavailable", detail: error.message });
+    }
+  }
+  if (pathname === "/api/feedback") {
+    const user = await authenticatedUser(req);
+    if (!user) return json(res, 401, { error: "unauthorized", message: "Vui lòng đăng nhập lại." });
+    const sectionId = String(input.section_id || "").trim();
+    const category = String(input.category || "").trim();
+    const message = String(input.message || "");
+    if (!sectionId || sectionId.length > 160) return json(res, 400, { error: "invalid_section_id", message: "Thiếu section." });
+    if (!feedbackCategoryIsValid(category)) return json(res, 400, { error: "invalid_category", message: "Loại feedback không hợp lệ." });
+    if (!feedbackMessageIsValid(message)) return json(res, 400, { error: "invalid_message", message: "Nội dung feedback cần từ 3 đến 2000 ký tự." });
+    if (!dbPool || dbInitError) return json(res, 503, { error: "database_unavailable", message: "Không thể gửi feedback lúc này." });
+    try {
+      const id = await saveFeedback(user.id, sectionId, category, message);
+      return json(res, 201, { saved: true, id });
+    } catch (error) {
+      return json(res, 503, { error: "database_unavailable", message: "Không thể gửi feedback lúc này.", detail: error.message });
     }
   }
   const route = pathname === "/api/learning/analyze" ? "analyze" : pathname === "/api/tutor" ? "tutor" : pathname === "/api/remediation" ? "remediation" : null;
