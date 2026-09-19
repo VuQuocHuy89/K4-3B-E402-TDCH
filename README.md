@@ -9,7 +9,7 @@
 | Họ và Tên | Mã Học Viên | Vai trò chính | Phần việc đảm nhiệm trong dự án |
 |---|---|---|---|
 | Nguyễn Hoàng Cường | 2A202602473 | Diagnostic / Scoring | Diagnostic test, scoring và phát hiện knowledge gap |
-| Tống Trần Dũng | 2A202602791 | Evidence / User Research | Khảo sát, phỏng vấn và ghi log evidence/quote |
+| Tống Trần Tiến Dũng | 2A202602791 | Evidence / User Research | Khảo sát, phỏng vấn và ghi log evidence/quote |
 | Vũ Đức Thiện | 2A202602437 | Competency Map | Competency map và prerequisite graph |
 | Vũ Quốc Huy | 2A202602929 | Đội trưởng / Roadmap & RAG | Learning roadmap, RAG/citation, tích hợp repo và nộp checkpoint |
 
