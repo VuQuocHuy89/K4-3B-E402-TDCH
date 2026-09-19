@@ -4,7 +4,7 @@
 
 ## 👥 Thành viên nhóm & Phân công vai trò
 
-**Lớp:** 3B · **Phòng:** E402 · **Cụm:** ____ · **Track:** D — Học tập thích ứng & tương tác
+**Lớp:** 3B · **Phòng:** E402 · **Cụm:** C3 · **Track:** D — Học tập thích ứng & tương tác
 
 | Họ và Tên | Mã Học Viên | Vai trò chính | Phần việc đảm nhiệm trong dự án |
 |---|---|---|---|
@@ -139,6 +139,8 @@ Sau 21:00 hôm đó **không sửa chuẩn "đạt" được nữa**.
 **Nộp:**
 - **Slide 6 trang, xuất ra PDF** theo `02-guide.md` §5.1. Nộp PDF chứ không nộp link — link hay hỏng quyền đúng lúc cần
 - **Video demo dự phòng** — quay sẵn phần demo. Nếu hôm pitch mạng chết thì BTC chiếu video này và **không trừ điểm**
+
+Trong repo, video thao tác CP3 là `demo/cp3-demo.mp4`; video dự phòng CP5 là `demo/cp5-demo-backup.mp4`. Đây là hai video khác nhau và cần được upload/nộp theo đúng form CP3, CP5.
 
 > **CP3 và CP5 là hai video khác nhau:**
 > **CP3** chứng minh sản phẩm chạy — quay ngắn, quay thô cũng được.

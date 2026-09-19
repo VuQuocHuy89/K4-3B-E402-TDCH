@@ -56,7 +56,7 @@ Loại: [ ] Tối ưu tính năng có sẵn  [x] Tính năng mới
 ### CP3 — Phạm vi chạy thật
 - AI call trung tâm: `POST /api/learning/analyze` nhận kết quả diagnostic và đề xuất competency gap, thứ tự section, lý do và thời lượng.
 - Grounding: server dùng `pdftotext` đọc `Grokking Machine Learning.pdf` khi có tài liệu local; nếu section cần học liệu bổ sung, route `/api/sources/discover` dùng web grounding của provider để tìm nguồn chính thống. URL được lọc qua allowlist HTTPS trước khi hiển thị. Tutor và remediation trả về `source_ids` thuộc map `GML-CH01`–`GML-CH13`.
-- Provider của lượt demo: OpenRouter `openai/gpt-4o`, giới hạn 800 token; khi provider lỗi, hệ thống chuyển sang provider dự phòng hoặc deterministic fallback. Trace trong `eval/cp3-ai-trace.jsonl` lưu route, input, prompt, phản hồi mô hình, output, provider và lỗi fallback; API key được loại bỏ.
+- Bằng chứng CP3 đã lưu được chạy với OpenRouter `openai/gpt-4o`, giới hạn 800 token; khi provider lỗi, hệ thống chuyển sang provider dự phòng hoặc deterministic fallback. Runtime hiện tại mặc định dùng OpenRouter `nex-agi/nex-n2.5-mini:free` với reasoning tắt, và có Gemini làm provider dự phòng khi được cấu hình. Trace trong `eval/cp3-ai-trace.jsonl` lưu route, input, prompt, phản hồi mô hình, output, provider và lỗi fallback; API key được loại bỏ.
 - Rule do ứng dụng giữ: điểm diagnostic/mastery, ngưỡng pass 80% và unlock section không do model tự quyết.
 - Learning package: mỗi section hiển thị mục tiêu, learning cards, ví dụ transfer, checklist, mastery test và reference desk. Nguồn mới có thể được tìm theo section; khi provider lỗi, hệ thống dùng curated catalog thay vì để nội dung trống.
 
@@ -92,7 +92,7 @@ Kịch bản nhóm lo ngại nhất khi demo là AI trả về một roadmap có
 - Golden set: 20 case trong `eval/cp3-cases.json`, gồm 10 case thường, 2 case nguồn sự thật, 2 case thiếu thông tin, 2 case ngoài phạm vi, 2 case đặc thù domain và 2 case hiếm. Trong đó 10 case được phát triển từ chatlog VLearn anonymized, lưu mã `conversation_id:turn_id` và không đưa nguyên văn chatlog vào repo.
 - Quality bar chốt tại CP4: `quality_rate = số case đạt đồng thời grounding và relevance / tổng số case`. Bộ 20 case đạt khi `quality_rate ≥ 80%` và `out_of_scope_no_evidence_rate = 100%`.
 - Chạy đo: `PATHWISE_URL=http://127.0.0.1:4173 node scripts/run-cp3-measure.js --save eval/cp3-results-final.json`. Kết quả lượt chạy trọn bộ: 20/20 case đạt ở cấp hệ thống; 2 case dùng OpenRouter live và 18 case dùng deterministic fallback do giới hạn credit/quota của provider.
-- Kiểm thử quyết định trung tâm: `POST /api/learning/analyze` đã chạy thành công bằng OpenRouter `openai/gpt-4o`, `live: true`, có competency gaps, recommended path và source IDs. Kết quả lưu tại `eval/cp3-central-result-live-check.json`.
+- Kiểm thử quyết định trung tâm đã chạy thành công bằng OpenRouter `openai/gpt-4o`, `live: true`, có competency gaps, recommended path và source IDs. Đây là bằng chứng của lượt CP3 được lưu tại `eval/cp3-central-result-live-check.json`; cấu hình production hiện tại được mô tả trong `codebase/README.md`.
 - Bảng kết quả: 20/20 case đạt ở cấp hệ thống (`100%`), gồm 2/2 case AI live (`100%`) và 18/18 case deterministic fallback (`100%`). Kết quả này không được diễn giải thành độ chính xác riêng của AI live.
 
 ## §8. Phân công & kế hoạch
@@ -109,7 +109,7 @@ Kịch bản nhóm lo ngại nhất khi demo là AI trả về một roadmap có
   | Đặng Quang Hưng | Học viên | Nhập mục tiêu AI Engineer, chọn thời lượng, hoàn thành diagnostic và đánh giá roadmap được đề xuất. |
   | Nguyễn Viết Đức | Học viên | Thực hiện cùng luồng; thử học một section, làm mastery test và kiểm tra cách hệ thống xử lý khi chưa đạt 80%. |
   - Người phụ trách validation và ghi nhật ký: Tống Trần Dũng. Người phụ trách dry-run flow và video demo: Vũ Quốc Huy; Nguyễn Hoàng Cường kiểm tra diagnostic/scoring; Vũ Đức Thiện kiểm tra competency map/prerequisite.
-  - Khi validation được thực hiện, nhóm sẽ ghi người thử, task, điểm kẹt, quote nguyên văn, quyết định thay đổi và lưu nhật ký trong `validation/`; chưa ghi nhận kết quả validation ở CP4.
+  - Nhóm đã ghi người thử, task, điểm kẹt, quote nguyên văn và quyết định thay đổi trong `validation/user-test-log.md`; các phản hồi được dùng để bổ sung learning deck, sửa logic diagnostic và làm rõ giới hạn của prototype.
 
 ## §9. Changelog
 | Thời điểm | Đổi gì | Vì sao (trỏ về feedback/case nào) |
@@ -122,6 +122,6 @@ Kịch bản nhóm lo ngại nhất khi demo là AI trả về một roadmap có
 ## Tự khai phần chưa hoàn thiện tại CP4
 - Evidence đã có `n = 23` phản hồi và log câu hỏi/câu trả lời trong `evidence/survey-log.md`. Đây là khảo sát thuận tiện trong phạm vi nhóm tiếp cận, không khẳng định đại diện cho toàn bộ người học AI Engineer.
 - File khảo sát không ghi thông tin để kiểm tra thành viên nhóm; điều kiện “23 người ngoài nhóm” cần được đội trưởng xác nhận khi nộp.
-- Validation với willing users chưa thực hiện; kế hoạch đã ghi ở §8 và sẽ ghi kết quả thật trong `validation/` khi triển khai.
+- Validation đã được ghi nhận trong `validation/user-test-log.md`, gồm hai willing user đã khai báo và các lượt quan sát bổ sung. Một số người dùng vẫn phản hồi rằng câu hỏi còn cơ bản; đây là hạn chế đã được tự khai thay vì coi kết quả là hoàn thiện.
 - Kết quả 20/20 là phép đo cấp hệ thống; chỉ 2/20 case được xử lý bằng AI live trong lượt chạy đã lưu, 18/20 case dùng deterministic fallback.
 - Production đã có cơ chế tải/cache PDF qua `DOCUMENT_PDF_URL`, nhưng Render vẫn cần được cấu hình một URL HTTPS tới file được cấp quyền. Khi chưa cấu hình biến này, health check sẽ báo `document.loaded=false`; không trình bày grounding PDF cloud là đã hoàn tất.
