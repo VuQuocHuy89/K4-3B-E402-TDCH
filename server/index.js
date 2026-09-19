@@ -21,6 +21,7 @@ const {
 } = require("./topic-context");
 const { discoverCatalogSources, sanitizeSources } = require("./source-catalog");
 const { clamp, assessmentCountForSections, validateAssessmentQuestion } = require("./learning-contracts");
+const { parseModelJson, runHedgedProviders } = require("./ai-runtime");
 
 const execFileAsync = promisify(execFile);
 const port = Number(process.env.PORT || 4173);
@@ -104,10 +105,20 @@ const initDatabase = async () => {
         message TEXT NOT NULL,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      CREATE TABLE IF NOT EXISTS ai_content_cache (
+        cache_key TEXT PRIMARY KEY,
+        route TEXT NOT NULL,
+        data JSONB NOT NULL,
+        provider TEXT,
+        model TEXT,
+        expires_at TIMESTAMPTZ NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
       ALTER TABLE learning_sessions ADD COLUMN IF NOT EXISTS user_id TEXT;
       CREATE INDEX IF NOT EXISTS auth_sessions_user_id_idx ON auth_sessions(user_id);
       CREATE INDEX IF NOT EXISTS auth_sessions_expires_at_idx ON auth_sessions(expires_at);
-      CREATE INDEX IF NOT EXISTS lesson_feedback_section_id_idx ON lesson_feedback(section_id)
+      CREATE INDEX IF NOT EXISTS lesson_feedback_section_id_idx ON lesson_feedback(section_id);
+      CREATE INDEX IF NOT EXISTS ai_content_cache_expires_at_idx ON ai_content_cache(expires_at)
     `);
     await seedContentCatalog();
   } catch (error) {
@@ -140,6 +151,27 @@ const saveFeedback = async (userId, sectionId, category, message) => {
     [id, userId, sectionId, category, message.trim()],
   );
   return id;
+};
+
+const aiCacheKey = (route, value) => `${route}:${crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex")}`;
+const loadAiCache = async (cacheKey) => {
+  if (!dbPool || dbInitError) return null;
+  try {
+    const result = await dbPool.query(
+      "SELECT data, provider, model, updated_at FROM ai_content_cache WHERE cache_key = $1 AND expires_at > NOW()",
+      [cacheKey],
+    );
+    return result.rows[0] || null;
+  } catch { return null; }
+};
+const saveAiCache = async (cacheKey, route, data, provider, model, ttlHours = 168) => {
+  if (!dbPool || dbInitError || !data) return;
+  try {
+    await dbPool.query(
+      "INSERT INTO ai_content_cache (cache_key, route, data, provider, model, expires_at, updated_at) VALUES ($1, $2, $3::jsonb, $4, $5, NOW() + ($6::double precision * INTERVAL '1 hour'), NOW()) ON CONFLICT (cache_key) DO UPDATE SET data = EXCLUDED.data, provider = EXCLUDED.provider, model = EXCLUDED.model, expires_at = EXCLUDED.expires_at, updated_at = NOW()",
+      [cacheKey, route, JSON.stringify(data), provider, model, ttlHours],
+    );
+  } catch {}
 };
 
 const readContentCatalogSeed = async () => {
@@ -296,8 +328,15 @@ const providerOrder = () => {
 };
 
 const modelFor = (name) => name === "openrouter"
-  ? (process.env.OPENROUTER_MODEL || "openrouter/free")
+  ? (process.env.OPENROUTER_MODEL || "nex-agi/nex-n2.5-mini:free")
   : (process.env.GEMINI_MODEL || process.env.AI_MODEL || "gemini-3.6-flash");
+
+const boundedTimeout = (name, fallback, maximum) => Math.max(3000, Math.min(maximum, Number(process.env[name]) || fallback));
+const hedgeDelayMs = () => Math.max(0, Math.min(15000, Number(process.env.AI_HEDGE_DELAY_MS) || 12000));
+const openRouterControls = () => ({
+  reasoning: { effort: String(process.env.OPENROUTER_REASONING_EFFORT || "none"), exclude: true },
+  provider: { require_parameters: true },
+});
 
 const downloadDocument = async () => {
   if (!documentPdfUrl) return;
@@ -476,19 +515,43 @@ const fallbackAssessment = (input) => {
   return { status: "fallback", mode, question_count: questions.length, questions };
 };
 
-const parseModel = (value) => JSON.parse(String(value).trim().replace(/^```json\s*/i, "").replace(/\s*```$/, ""));
-const fetchJson = async (url, options, timeoutMs = Number(process.env.AI_TIMEOUT_MS || 12000)) => {
+const parseModel = parseModelJson;
+const fetchJson = async (url, options, timeoutMs = boundedTimeout("AI_TIMEOUT_MS", 15000, 25000), parentSignal = null) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromParent = () => controller.abort();
+  if (parentSignal?.aborted) controller.abort();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
   try {
     const response = await fetch(url, { ...options, signal: controller.signal });
     const body = await response.text();
-    if (!response.ok) throw new Error(`provider_http_${response.status}`);
-    return JSON.parse(body);
-  } finally { clearTimeout(timer); }
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const parsed = JSON.parse(body);
+        detail = String(parsed?.error?.message || parsed?.message || "").replace(/\s+/g, " ").slice(0, 180);
+      } catch {}
+      throw new Error(`provider_http_${response.status}${detail ? `:${detail}` : ""}`);
+    }
+    return parseModelJson(body);
+  } finally {
+    clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", abortFromParent);
+  }
 };
 
-const callProvider = async (name, route, input) => {
+const openRouterText = (response) => {
+  const choice = response.choices?.[0];
+  const content = choice?.message?.content;
+  const value = Array.isArray(content) ? content.map((part) => part.text || part.content || "").join("") : String(content || "");
+  if (value.trim()) return value;
+  const finishReason = choice?.finish_reason || "unknown";
+  const completionTokens = response.usage?.completion_tokens;
+  const reasoningTokens = response.usage?.completion_tokens_details?.reasoning_tokens;
+  throw new Error(`provider_empty_response:finish=${finishReason}:completion_tokens=${completionTokens ?? "unknown"}:reasoning_tokens=${reasoningTokens ?? "unknown"}`);
+};
+
+const callProvider = async (name, route, input, signal = null) => {
   const modelInput = route === "assessment" ? Object.fromEntries(Object.entries(input).filter(([key]) => key !== "fallback_questions")) : input;
   const assessmentInstruction = route === "assessment" ? `For the assessment, generate exactly ${assessmentCount(input)} distinct questions. Cover every runtime section and competency at least once, distribute additional questions toward sections with more concepts/checklist items, use only the verified source_ids attached to each section, and keep one objectively correct option per question.` : "";
   const prompt = `Complete this bounded task using the mapped PDF or web evidence. ${assessmentInstruction} Return exactly one JSON object matching this schema and field names: ${JSON.stringify(schemas[route])}. Input: ${JSON.stringify(modelInput)}`;
@@ -502,7 +565,7 @@ const callProvider = async (name, route, input) => {
         contents: [{ role: "user", parts: [{ text: prompt }] }],
         generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: schemas[route] },
       }),
-    });
+    }, boundedTimeout("AI_TIMEOUT_MS", 15000, 25000), signal);
     const rawResponse = response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
     return { data: parseModel(rawResponse), prompt, rawResponse };
   }
@@ -514,9 +577,9 @@ const callProvider = async (name, route, input) => {
       ...(process.env.OPENROUTER_HTTP_REFERER ? { "HTTP-Referer": process.env.OPENROUTER_HTTP_REFERER } : {}),
       ...(process.env.OPENROUTER_TITLE ? { "X-Title": process.env.OPENROUTER_TITLE } : {}),
     },
-    body: JSON.stringify({ model: modelFor(name), messages: [{ role: "system", content: systemPrompt(route, modelInput) }, { role: "user", content: prompt }], temperature: 0.2, max_tokens: route === "assessment" ? Number(process.env.ASSESSMENT_MAX_TOKENS || 5000) : Number(process.env.OPENROUTER_MAX_TOKENS || 800), response_format: { type: "json_object" } }),
-  });
-  const rawResponse = response.choices?.[0]?.message?.content || "";
+    body: JSON.stringify({ model: modelFor(name), messages: [{ role: "system", content: systemPrompt(route, modelInput) }, { role: "user", content: prompt }], temperature: 0.2, max_tokens: route === "assessment" ? Number(process.env.ASSESSMENT_MAX_TOKENS || 5000) : Number(process.env.OPENROUTER_MAX_TOKENS || 800), response_format: { type: "json_object" }, ...openRouterControls() }),
+  }, boundedTimeout("AI_TIMEOUT_MS", 15000, 25000), signal);
+  const rawResponse = openRouterText(response);
   return { data: parseModel(rawResponse), prompt, rawResponse };
 };
 
@@ -606,12 +669,12 @@ const learningBlueprintSchema = {
   properties: {
     status: { type: "string" },
     topic: { type: "object", properties: { title: { type: "string" }, objective: { type: "string" }, duration: { type: "string" } }, required: ["title", "objective"] },
-    sources: { type: "array", items: { type: "object", properties: { title: { type: "string" }, publisher: { type: "string" }, url: { type: "string" }, domain: { type: "string" }, type: { type: "string" }, summary: { type: "string" }, why_selected: { type: "string" } }, required: ["title", "publisher", "url", "summary"] } },
+    sources: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, publisher: { type: "string" }, url: { type: "string" }, domain: { type: "string" }, type: { type: "string" }, summary: { type: "string" }, why_selected: { type: "string" } }, required: ["id", "title", "publisher", "url", "summary"] } },
     competencies: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, summary: { type: "string" }, source_ids: { type: "array", items: { type: "string" } } }, required: ["id", "title", "summary", "source_ids"] } },
     sections: { type: "array", items: { type: "object", properties: { id: { type: "string" }, title: { type: "string" }, eyebrow: { type: "string" }, objective: { type: "string" }, description: { type: "string" }, prerequisite: { type: "string" }, duration: { type: "integer" }, competency_id: { type: "string" }, source_ids: { type: "array", items: { type: "string" } }, concepts: { type: "array", items: { type: "object", properties: { title: { type: "string" }, body: { type: "string" } }, required: ["title", "body"] } }, checklist: { type: "array", items: { type: "string" } } }, required: ["id", "title", "objective", "duration", "competency_id", "source_ids", "concepts", "checklist"] } },
     roadmap_ref: { type: "object", properties: { label: { type: "string" }, url: { type: "string" }, note: { type: "string" } } },
   },
-  required: ["status", "topic", "sources", "competencies", "sections"],
+  required: ["status", "topic", "competencies", "sections"],
 };
 
 const learningPackageSchema = {
@@ -647,7 +710,7 @@ const learningPackageSchema = {
   required: ["status", "objective", "slides", "concepts", "example", "practice_steps", "transfer_question", "source_urls", "estimated_minutes"],
 };
 
-const callSourceProvider = async (name, input) => {
+const callSourceProvider = async (name, input, signal = null) => {
   const prompt = sourceDiscoveryPrompt(input);
   if (name === "gemini") {
     const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
@@ -660,7 +723,7 @@ const callSourceProvider = async (name, input) => {
         tools: [{ google_search: {} }],
         generationConfig: { temperature: 0.1, responseMimeType: "application/json", responseSchema: sourceDiscoverySchema },
       }),
-    }, Number(process.env.SOURCE_DISCOVERY_TIMEOUT_MS || 8000));
+    }, boundedTimeout("SOURCE_DISCOVERY_TIMEOUT_MS", 12000, 20000), signal);
     return parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(""));
   }
   const response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
@@ -673,63 +736,81 @@ const callSourceProvider = async (name, input) => {
       max_tokens: Number(process.env.OPENROUTER_MAX_TOKENS || 800),
       response_format: { type: "json_object" },
       tools: [{ type: "openrouter:web_search", parameters: { engine: "auto", max_results: 5, max_total_results: 5, search_context_size: "low" } }],
+      ...openRouterControls(),
     }),
-  }, Number(process.env.SOURCE_DISCOVERY_TIMEOUT_MS || 8000));
-  const content = response.choices?.[0]?.message?.content;
-  return parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content);
+  }, boundedTimeout("SOURCE_DISCOVERY_TIMEOUT_MS", 12000, 20000), signal);
+  return parseModel(openRouterText(response));
 };
 
 const runSourceDiscovery = async (input) => {
   const started = Date.now();
   const requestId = crypto.randomUUID();
-  const attempts = [];
   const maxResults = Math.max(3, Math.min(8, Number(process.env.SOURCE_DISCOVERY_MAX_RESULTS || 5)));
-  for (const candidate of providerOrder()) {
-    try {
-      const result = await callSourceProvider(candidate, input);
+  const race = await runHedgedProviders(providerOrder(), async (candidate, signal) => {
+      const result = await callSourceProvider(candidate, input, signal);
       const sourcesFound = sanitizeSources(result.sources, maxResults);
       if (!sourcesFound.length) throw new Error("provider_no_verified_sources");
-      const meta = { request_id: requestId, route: "sources", provider: candidate, model: modelFor(candidate), live: true, fallback_reason: null, attempts, latency_ms: Date.now() - started };
-      try { await fs.appendFile(traceFile, `${JSON.stringify({ ...meta, source_count: sourcesFound.length })}\n`); } catch {}
-      return { data: { status: "ok", query: input.query || "", note: result.note || "Nguồn đã được lọc theo allowlist.", sources: sourcesFound }, meta };
-    } catch (error) {
-      attempts.push({ provider: candidate, reason: error.name === "AbortError" ? "timeout" : error.message });
-    }
+      return { result, sourcesFound };
+  }, { staggerMs: hedgeDelayMs() });
+  if (race.value) {
+      const meta = { request_id: requestId, route: "sources", provider: race.provider, model: modelFor(race.provider), live: true, fallback_reason: null, attempts: race.attempts, latency_ms: Date.now() - started };
+      try { await fs.appendFile(traceFile, `${JSON.stringify({ ...meta, source_count: race.value.sourcesFound.length })}\n`); } catch {}
+      return { data: { status: "ok", query: input.query || "", note: race.value.result.note || "Nguồn đã được lọc theo allowlist.", sources: race.value.sourcesFound }, meta };
   }
   const fallbackSources = discoverCatalogSources(input.query || input.section_id, maxResults);
-  const meta = { request_id: requestId, route: "sources", provider: "curated-catalog", model: null, live: false, fallback_reason: attempts[attempts.length - 1]?.reason || "no_provider_configured", attempts, latency_ms: Date.now() - started };
+  const meta = { request_id: requestId, route: "sources", provider: "curated-catalog", model: null, live: false, fallback_reason: race.attempts[race.attempts.length - 1]?.reason || "no_provider_configured", attempts: race.attempts, latency_ms: Date.now() - started };
   try { await fs.appendFile(traceFile, `${JSON.stringify({ ...meta, source_count: fallbackSources.length })}\n`); } catch {}
   return { data: { status: "catalog", query: input.query || "", note: "Tạm dùng catalog nguồn chính thống đã kiểm duyệt; bạn có thể tìm lại khi AI provider sẵn sàng.", sources: fallbackSources }, meta };
 };
 
-const blueprintPrompt = (input) => [
+const blueprintEvidence = (input) => {
+  const query = [input.topic, input.topic_label, input.objective].filter(Boolean).join(" ");
+  const catalog = discoverCatalogSources(query, 8);
+  const documentSource = documentPdfUrl ? [{
+    id: "uploaded-document",
+    title: documentFileName,
+    publisher: "Pathwise document library",
+    url: documentPdfUrl,
+    domain: (() => { try { return new URL(documentPdfUrl).hostname; } catch { return ""; } })(),
+    type: "PDF",
+    summary: `Tài liệu PDF đã được nạp và trích xuất ${documentState.pages.length || 0} trang để grounding nội dung.`,
+    why_selected: "Tài liệu do chủ dự án cung cấp cho learning path này.",
+    provenance: "uploaded-document",
+  }] : [];
+  return sanitizeSources([...documentSource, ...catalog], 6, { allowAnyHttps: true }).map((source, index) => ({
+    ...source,
+    id: `verified-source-${index + 1}`,
+  }));
+};
+
+const blueprintPrompt = (input, evidence) => [
   "You are a curriculum architect for Pathwise. Build a grounded learning blueprint for the learner's requested topic, not a fixed Machine Learning curriculum.",
-  "Use web search to find current, trustworthy sources and use https://roadmap.sh/ai-engineer only as an external orientation when it is relevant; do not copy its content.",
-  "Prefer official documentation, official courses, universities, standards, original research, and respected project documentation.",
+  "Use only the verified sources supplied below. Do not browse, invent, alter, or replace source URLs. roadmap.sh is orientation only; do not copy its content.",
   "Topic: " + JSON.stringify(input.topic || input.topic_label || ""),
   "Learner level: " + JSON.stringify(input.level || "beginner"),
   "Available minutes per day: " + JSON.stringify(input.minutes || 30),
   "Learner objective: " + JSON.stringify(input.objective || "Build practical understanding and apply the topic in an AI Engineer workflow."),
-  "Return JSON only matching this schema: " + JSON.stringify(learningBlueprintSchema),
-  "Create 4-6 ordered sections based on the actual breadth of the requested topic and the available time. Each section must have one distinct competency, prerequisite, objective, 2-4 concepts, 2-4 observable checklist items, and 10-90 estimated minutes. Use stable short ids inside this response.",
-  "Return 5-10 verified https source URLs. Every section and competency must cite one or more source_ids from that source list. Keep the blueprint specific to the requested topic and do not invent citations.",
+  "Verified source IDs: " + JSON.stringify(evidence.map((source) => ({ id: source.id, title: source.title, url: source.url, summary: source.summary.slice(0, 180) }))),
+  'Return one JSON object with this compact shape: {"status":"ok","topic":{"title":"...","objective":"...","duration":"..."},"competencies":[{"id":"...","title":"...","summary":"...","source_ids":["verified-source-1"]}],"sections":[{"id":"...","title":"...","eyebrow":"...","objective":"...","description":"...","prerequisite":null,"duration":20,"competency_id":"...","source_ids":["verified-source-1"],"concepts":[{"title":"...","body":"..."}],"checklist":["..."]}]}',
+  "Do not repeat source objects in the response. Create 4-5 ordered sections based on topic breadth and available time. Each section needs one competency, prerequisite, objective, 2-3 concepts, 2-3 observable checklist items, and 10-60 estimated minutes.",
+  "Every section and competency must cite exact IDs from the verified source list. Keep the content specific, concise and practical.",
 ].join("\n\n");
 
-const callBlueprintProvider = async (name, input) => {
-  const prompt = blueprintPrompt(input);
+const callBlueprintProvider = async (name, input, signal = null) => {
+  const evidence = blueprintEvidence(input);
+  const prompt = blueprintPrompt(input, evidence);
   if (name === "gemini") {
     const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
     const response = await fetchJson("https://generativelanguage.googleapis.com/v1beta/models/" + encodeURIComponent(modelFor(name)) + ":generateContent", {
       method: "POST",
       headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({
-        systemInstruction: { parts: [{ text: "Use Google Search grounding. Verify every source URL. Return only the requested JSON and do not copy long passages." }] },
+        systemInstruction: { parts: [{ text: "Use only the verified evidence in the request. Return only the requested JSON and do not copy long passages." }] },
         contents: [{ role: "user", parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
         generationConfig: { temperature: 0.15, responseMimeType: "application/json", responseSchema: learningBlueprintSchema },
       }),
-    }, Number(process.env.BLUEPRINT_TIMEOUT_MS || 15000));
-    return { data: parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("")), prompt };
+    }, boundedTimeout("BLUEPRINT_TIMEOUT_MS", 20000, 25000), signal);
+    return { data: parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("")), prompt, evidence };
   }
   const response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -738,21 +819,20 @@ const callBlueprintProvider = async (name, input) => {
       model: modelFor(name),
       messages: [{ role: "user", content: prompt }],
       temperature: 0.15,
-      max_tokens: Number(process.env.BLUEPRINT_MAX_TOKENS || 5000),
+      max_tokens: Math.max(1800, Math.min(3200, Number(process.env.BLUEPRINT_MAX_TOKENS) || 2800)),
       response_format: { type: "json_object" },
-      tools: [{ type: "openrouter:web_search", parameters: { engine: "auto", max_results: 8, max_total_results: 8, search_context_size: "high" } }],
+      ...openRouterControls(),
     }),
-  }, Number(process.env.BLUEPRINT_TIMEOUT_MS || 15000));
-  const content = response.choices?.[0]?.message?.content;
-  return { data: parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content), prompt };
+  }, boundedTimeout("BLUEPRINT_TIMEOUT_MS", 20000, 25000), signal);
+  return { data: parseModel(openRouterText(response)), prompt, evidence };
 };
 
-const normalizeBlueprint = (data, input) => {
+const normalizeBlueprint = (data, input, evidence = []) => {
   if (!data || typeof data !== "object") throw new Error("blueprint_invalid_object");
-  const rawSources = sanitizeSources(data.sources, 10, { allowAnyHttps: true });
+  const rawSources = [...new Map(evidence.map((source) => [source.url, source])).values()].slice(0, 10);
   if (rawSources.length < 3) throw new Error("blueprint_insufficient_sources");
   const sourceIdMap = new Map(rawSources.map((source, index) => [source.id, "topic-source-" + (index + 1)]));
-  const normalizedSources = rawSources.map((source, index) => ({ ...source, id: "topic-source-" + (index + 1), provenance: "web-grounded-blueprint" }));
+  const normalizedSources = rawSources.map((source, index) => ({ ...source, id: "topic-source-" + (index + 1), provenance: source.provenance || "verified-blueprint" }));
   const allSourceIds = normalizedSources.map((source) => source.id);
   const sourceIdsFor = (ids) => {
     const mapped = (Array.isArray(ids) ? ids : []).map((id) => sourceIdMap.get(id) || (allSourceIds.includes(id) ? id : "")).filter(Boolean);
@@ -806,7 +886,7 @@ const normalizeBlueprint = (data, input) => {
       title: String(data.topic?.title || input.topic || input.topic_label || "Learning topic").slice(0, 160),
       day: "AI-generated learning path",
       module: "Adaptive learning",
-      documentName: "Web-grounded sources",
+      documentName: documentState.loaded ? documentState.fileName : "Verified learning sources",
       objective: String(data.topic?.objective || input.objective || "Học và áp dụng topic theo mục tiêu thực tế.").slice(0, 700),
       duration: String(data.topic?.duration || normalizedSections.reduce((total, section) => total + section.duration, 0) + " phút nội dung cốt lõi").slice(0, 120),
       progress: 0,
@@ -826,19 +906,27 @@ const normalizeBlueprint = (data, input) => {
 const runBlueprint = async (input) => {
   const started = Date.now();
   const requestId = crypto.randomUUID();
-  const attempts = [];
-  for (const candidate of providerOrder()) {
-    try {
-      const result = await callBlueprintProvider(candidate, input);
-      const data = normalizeBlueprint(result.data, input);
-      const meta = { request_id: requestId, route: "blueprint", provider: candidate, model: modelFor(candidate), live: true, fallback_reason: null, attempts, latency_ms: Date.now() - started };
-      await writeTrace({ ...meta, input, prompt: result.prompt, output: data });
-      return { data, meta };
-    } catch (error) {
-      attempts.push({ provider: candidate, reason: error.name === "AbortError" ? "timeout" : error.message });
-    }
+  const cacheKey = aiCacheKey("blueprint", {
+    version: process.env.AI_CACHE_VERSION || "v1",
+    topic: normalise(input.topic || input.topic_label),
+    level: String(input.level || "beginner"),
+    minutes: Number(input.minutes) || 30,
+    objective: normalise(input.objective),
+  });
+  const cached = await loadAiCache(cacheKey);
+  if (cached?.data) return { data: cached.data, meta: { request_id: requestId, route: "blueprint", provider: cached.provider || "ai-cache", model: cached.model || null, live: true, cached: true, fallback_reason: null, attempts: [], latency_ms: Date.now() - started } };
+  const race = await runHedgedProviders(providerOrder(), async (candidate, signal) => {
+    const result = await callBlueprintProvider(candidate, input, signal);
+    const data = normalizeBlueprint(result.data, input, result.evidence);
+    return { result, data };
+  }, { staggerMs: hedgeDelayMs() });
+  if (race.value) {
+    const meta = { request_id: requestId, route: "blueprint", provider: race.provider, model: modelFor(race.provider), live: true, fallback_reason: null, attempts: race.attempts, latency_ms: Date.now() - started };
+    await saveAiCache(cacheKey, "blueprint", race.value.data, race.provider, modelFor(race.provider));
+    await writeTrace({ ...meta, input, prompt: race.value.result.prompt, output: race.value.data });
+    return { data: race.value.data, meta };
   }
-  return { data: null, meta: { request_id: requestId, route: "blueprint", provider: "static-catalog", model: null, live: false, fallback_reason: attempts[attempts.length - 1]?.reason || "no_provider_configured", attempts, latency_ms: Date.now() - started } };
+  return { data: null, meta: { request_id: requestId, route: "blueprint", provider: "static-catalog", model: null, live: false, fallback_reason: race.attempts[race.attempts.length - 1]?.reason || "no_provider_configured", attempts: race.attempts, latency_ms: Date.now() - started } };
 };
 
 const packagePrompt = (input, section, sourcesForPackage) => `You are a bounded Vietnamese instructional designer for an AI Engineer learning path. Create a substantial, beginner-friendly learning package for the section below using only the provided verified sources. Do not invent facts, URLs, learner scores, or citations. The package should fit about ${input.minutes || section.duration} minutes and be readable as an interactive slide deck, not as a short summary. Return JSON only matching this schema: ${JSON.stringify(learningPackageSchema)}.
@@ -905,6 +993,35 @@ const fallbackLearningPackage = (section, sourcesForPackage) => ({
   estimated_minutes: section.duration,
 });
 
+const callLearningPackageProvider = async (candidate, prompt, signal = null) => {
+  if (candidate === "gemini") {
+    const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+    const response = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor(candidate))}:generateContent`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": key },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: "Use only the verified sources in the request. Return JSON only." }] },
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: learningPackageSchema },
+      }),
+    }, boundedTimeout("LEARNING_PACKAGE_TIMEOUT_MS", 25000, 35000), signal);
+    return parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(""));
+  }
+  const response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
+    body: JSON.stringify({
+      model: modelFor(candidate),
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.2,
+      max_tokens: Number(process.env.LEARNING_PACKAGE_MAX_TOKENS || 3200),
+      response_format: { type: "json_object" },
+      ...openRouterControls(),
+    }),
+  }, boundedTimeout("LEARNING_PACKAGE_TIMEOUT_MS", 25000, 35000), signal);
+  return parseModel(openRouterText(response));
+};
+
 const runLearningPackage = async (input) => {
   const started = Date.now();
   const requestId = crypto.randomUUID();
@@ -912,38 +1029,29 @@ const runLearningPackage = async (input) => {
   if (!section) return { data: { status: "no_evidence", reason: "section_not_found" }, meta: { request_id: requestId, route: "learning-package", live: false } };
   const sourcesForPackage = sanitizeSources(input.sources, 8, { allowAnyHttps: true });
   if (!sourcesForPackage.length) return { data: fallbackLearningPackage(section, discoverCatalogSources(section.title, 3)), meta: { request_id: requestId, route: "learning-package", provider: "curated-catalog", live: false, fallback_reason: "no_verified_sources", latency_ms: Date.now() - started } };
-  const attempts = [];
-  for (const candidate of providerOrder()) {
-    try {
-      const prompt = packagePrompt(input, section, sourcesForPackage);
-      let response;
-      if (candidate === "gemini") {
-        const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
-        response = await fetchJson(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelFor(candidate))}:generateContent`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-          body: JSON.stringify({ systemInstruction: { parts: [{ text: "Use only the verified sources in the request, and use Google Search grounding to read those sources when needed. Return JSON only." }] }, contents: [{ role: "user", parts: [{ text: prompt }] }], tools: [{ google_search: {} }], generationConfig: { temperature: 0.2, responseMimeType: "application/json", responseSchema: learningPackageSchema } }),
-        });
-        response = parseModel(response.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join(""));
-      } else {
-        response = await fetchJson("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}` },
-          body: JSON.stringify({ model: modelFor(candidate), messages: [{ role: "user", content: prompt }], temperature: 0.2, max_tokens: Number(process.env.LEARNING_PACKAGE_MAX_TOKENS || 3200), response_format: { type: "json_object" }, tools: [{ type: "openrouter:web_search", parameters: { engine: "auto", max_results: 6, max_total_results: 6, search_context_size: "high" } }] }),
-        });
-        const content = response.choices?.[0]?.message?.content;
-        response = parseModel(Array.isArray(content) ? content.map((part) => part.text || "").join("") : content);
-      }
-      const data = validateLearningPackage(response, section, sourcesForPackage);
-      const meta = { request_id: requestId, route: "learning-package", provider: candidate, model: modelFor(candidate), live: true, fallback_reason: null, attempts, latency_ms: Date.now() - started };
-      try { await fs.appendFile(traceFile, `${JSON.stringify({ ...meta, source_count: data.source_urls.length })}\n`); } catch {}
-      return { data, meta };
-    } catch (error) {
-      attempts.push({ provider: candidate, reason: error.name === "AbortError" ? "timeout" : error.message });
-    }
+  const cacheKey = aiCacheKey("learning-package", {
+    version: process.env.AI_CACHE_VERSION || "v1",
+    topic: normalise(input.topic_label || input.topic_id),
+    section: normalise(`${section.id || ""} ${section.title || ""} ${section.objective || ""}`),
+    minutes: Number(input.minutes || section.duration) || 20,
+    sources: sourcesForPackage.map((source) => source.url).sort(),
+  });
+  const cached = await loadAiCache(cacheKey);
+  if (cached?.data) return { data: cached.data, meta: { request_id: requestId, route: "learning-package", provider: cached.provider || "ai-cache", model: cached.model || null, live: true, cached: true, fallback_reason: null, attempts: [], latency_ms: Date.now() - started } };
+  const prompt = packagePrompt(input, section, sourcesForPackage);
+  const race = await runHedgedProviders(providerOrder(), async (candidate, signal) => {
+    const response = await callLearningPackageProvider(candidate, prompt, signal);
+    const data = validateLearningPackage(response, section, sourcesForPackage);
+    return data;
+  }, { staggerMs: hedgeDelayMs() });
+  if (race.value) {
+    const meta = { request_id: requestId, route: "learning-package", provider: race.provider, model: modelFor(race.provider), live: true, fallback_reason: null, attempts: race.attempts, latency_ms: Date.now() - started };
+    await saveAiCache(cacheKey, "learning-package", race.value, race.provider, modelFor(race.provider));
+    try { await fs.appendFile(traceFile, `${JSON.stringify({ ...meta, source_count: race.value.source_urls.length })}\n`); } catch {}
+    return { data: race.value, meta };
   }
   const data = fallbackLearningPackage(section, sourcesForPackage);
-  const meta = { request_id: requestId, route: "learning-package", provider: "curated-catalog", model: null, live: false, fallback_reason: attempts[attempts.length - 1]?.reason || "no_provider_configured", attempts, latency_ms: Date.now() - started };
+  const meta = { request_id: requestId, route: "learning-package", provider: "curated-catalog", model: null, live: false, fallback_reason: race.attempts[race.attempts.length - 1]?.reason || "no_provider_configured", attempts: race.attempts, latency_ms: Date.now() - started };
   try { await fs.appendFile(traceFile, `${JSON.stringify({ ...meta, source_count: data.source_urls.length })}\n`); } catch {}
   return { data, meta };
 };
@@ -1006,22 +1114,21 @@ const fallback = (route, input) => {
 const runAgent = async (route, input) => {
   const started = Date.now();
   const requestId = crypto.randomUUID();
-  const attempts = [];
   let data;
   let modelTrace = null;
   let live = false;
   let selectedProvider = null;
-  for (const candidate of providerOrder()) {
-    try {
-      const providerResult = await callProvider(candidate, route, input);
-      data = validateProviderResult(route, providerResult.data, input);
-      modelTrace = { prompt: providerResult.prompt, rawResponse: providerResult.rawResponse };
-      selectedProvider = candidate;
-      live = true;
-      break;
-    } catch (error) {
-      attempts.push({ provider: candidate, reason: error.name === "AbortError" ? "timeout" : error.message });
-    }
+  const race = await runHedgedProviders(providerOrder(), async (candidate, signal) => {
+    const providerResult = await callProvider(candidate, route, input, signal);
+    const validated = validateProviderResult(route, providerResult.data, input);
+    return { data: validated, providerResult };
+  }, { staggerMs: hedgeDelayMs() });
+  const attempts = race.attempts;
+  if (race.value) {
+    data = race.value.data;
+    modelTrace = { prompt: race.value.providerResult.prompt, rawResponse: race.value.providerResult.rawResponse };
+    selectedProvider = race.provider;
+    live = true;
   }
   if (!data) data = fallback(route, input);
   if (route === "analyze") data = safeAnalysis(data, input);
@@ -1034,7 +1141,7 @@ const runAgent = async (route, input) => {
     selectedProvider = null;
     attempts.push({ provider: "application", reason: "provider_output_did_not_cover_requested_content" });
   }
-  const meta = { request_id: requestId, route, provider: live ? selectedProvider : "deterministic-fallback", model: live ? modelFor(selectedProvider) : null, live, fallback_reason: attempts[attempts.length - 1]?.reason || null, attempts, document_loaded: documentState.loaded, latency_ms: Date.now() - started };
+  const meta = { request_id: requestId, route, provider: live ? selectedProvider : "deterministic-fallback", model: live ? modelFor(selectedProvider) : null, live, fallback_reason: live ? null : attempts[attempts.length - 1]?.reason || null, attempts, document_loaded: documentState.loaded, latency_ms: Date.now() - started };
   await writeTrace({
     ...meta,
     input,

@@ -4,8 +4,8 @@ Prototype CP3 cho lát cắt: người học muốn trở thành AI Engineer, t�
 
 ## Luồng demo
 
-1. Chọn một hướng học trong danh sách, trình độ hiện tại và tự nhập thời lượng học mỗi ngày (10–240 phút); hệ thống chưa gán topic trước khi người học xác nhận. Bản demo CP3 chạy đầy đủ với Machine Learning, các hướng khác được hiển thị để mở rộng sau.
-2. Hoàn thành diagnostic 6 câu rồi gửi kết quả tới `/api/learning/analyze`; agent đọc ngữ cảnh từ tài liệu local và đề xuất competency/section ưu tiên.
+1. Chọn hoặc nhập một hướng học, trình độ hiện tại và thời lượng học mỗi ngày (10–240 phút); `/api/learning/blueprint` tạo số section và nội dung lộ trình theo độ rộng của topic.
+2. Hoàn thành diagnostic có số câu được tính theo các section rồi gửi kết quả tới `/api/learning/analyze`; agent đọc ngữ cảnh tài liệu và đề xuất competency/section ưu tiên.
 3. Mở section theo prerequisite, học, làm mastery test và chỉ mở bước tiếp theo khi đạt 80%.
 4. Nếu chưa đạt, gọi `/api/remediation` để tạo vòng ôn ngắn; AI tutor dùng `/api/tutor` để giải thích có source ID.
 
@@ -15,13 +15,13 @@ Prototype CP3 cho lát cắt: người học muốn trở thành AI Engineer, t�
 - `/api/learning/analyze` là quyết định AI trung tâm: xếp ưu tiên competency và learning path từ diagnostic.
 - `/api/sources/discover` tìm nguồn học bổ sung theo section bằng web grounding của provider; backend chỉ trả về URL HTTPS thuộc allowlist tài liệu chính thống và có curated catalog dự phòng.
 - `/api/learning/package` chuyển các nguồn đã lọc thành learning deck 7–9 slide gồm mục tiêu, giải thích, ví dụ, lỗi thường gặp, checklist, self-check và nguồn riêng cho từng slide; nếu tạo live thất bại, deck catalog an toàn vẫn được giữ lại.
-- Gemini là provider ưu tiên; khi lỗi/quota, server thử OpenRouter; nếu cả hai không dùng được thì mới fallback deterministic.
+- OpenRouter và Gemini được chạy theo kiểu hedged request: provider ưu tiên chạy trước, provider dự phòng bắt đầu sau 12 giây hoặc ngay khi provider chính báo lỗi; kết quả hợp lệ đầu tiên được dùng. Blueprint và learning deck sinh thành công được cache trong PostgreSQL để lần mở sau không tốn thêm lượt AI.
 - Nội dung source được map theo các chapter `GML-CH01` đến `GML-CH13` của `Grokking Machine Learning`.
 
 ## Phần do ứng dụng kiểm soát
 
 - Điểm câu hỏi, ngưỡng pass 80% và unlock section do client kiểm soát, không giao cho model.
-- Bộ câu diagnostic/mastery/final là bộ câu hỏi được nhóm biên soạn dựa trên tài liệu, không phải output ngẫu nhiên ở runtime.
+- Số lượng và nội dung câu diagnostic/mastery/final được tạo ở runtime theo số section, competency và nguồn đã xác minh; backend kiểm tra đủ độ bao phủ trước khi chấp nhận output của model.
 - Khi người học mở section, hệ thống tìm nguồn trước rồi mới tạo learning deck. Deck và nguồn được lưu trong session của tài khoản để có thể reload; source URL chỉ được nhận nếu HTTPS và thuộc allowlist. Người học có thể chuyển slide bằng nút điều khiển hoặc phím `←` / `→`.
 - Không commit PDF, API key, `.env` hoặc dữ liệu người học vào repo.
 
@@ -51,5 +51,7 @@ Kết quả tách riêng số case đạt ở cấp hệ thống, số lượt A
 Khi chạy với `PATHWISE_API_BASE`, sau đăng nhập frontend gọi `/api/content/catalog` để lấy learning catalog đã publish từ PostgreSQL. `content-pack.js` chỉ còn là seed/fallback khi backend hoặc database chưa sẵn sàng. Tiến độ cá nhân vẫn được lưu qua `/api/session` theo user và được cache cục bộ để giao diện phản hồi nhanh.
 
 Trên Render cần cấu hình `DOCUMENT_PDF_URL` bằng một URL HTTPS ổn định tới file PDF được phép sử dụng. Server sẽ kiểm tra chữ ký PDF, tải vào `/tmp`, chạy `pdftotext` và báo `document.loaded` trong `/api/health`. Không dùng đường dẫn local trong repo cho production.
+
+Để tránh model miễn phí ngẫu nhiên tiêu hết token vào reasoning, cấu hình `OPENROUTER_MODEL=nex-agi/nex-n2.5-mini:free` và `OPENROUTER_REASONING_EFFORT=none`. Free tier vẫn có quota theo tài khoản; khi quota cạn hệ thống chuyển nhanh sang provider còn lại hoặc catalog an toàn thay vì chờ treo giao diện.
 
 Khi cập nhật nội dung seed, tăng `CONTENT_CATALOG_VERSION` để server upsert catalog mới vào database. Không coi việc LLM trả fallback là dữ liệu production: UI và trace phải phân biệt rõ live provider, database catalog và deterministic fallback.

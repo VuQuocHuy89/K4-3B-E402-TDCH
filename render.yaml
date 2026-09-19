@@ -20,13 +20,23 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       - key: OPENROUTER_MODEL
-        value: openrouter/free
+        value: nex-agi/nex-n2.5-mini:free
+      - key: OPENROUTER_REASONING_EFFORT
+        value: none
       - key: LEARNING_PACKAGE_MAX_TOKENS
         value: "3200"
       - key: AI_TIMEOUT_MS
+        value: "15000"
+      - key: AI_HEDGE_DELAY_MS
         value: "12000"
+      - key: AI_CACHE_VERSION
+        value: v1
+      - key: BLUEPRINT_TIMEOUT_MS
+        value: "20000"
+      - key: LEARNING_PACKAGE_TIMEOUT_MS
+        value: "25000"
       - key: SOURCE_DISCOVERY_TIMEOUT_MS
-        value: "8000"
+        value: "12000"
       - key: DOCUMENT_PDF_URL
         sync: false
       - key: DOCUMENT_PDF_CACHE_PATH
